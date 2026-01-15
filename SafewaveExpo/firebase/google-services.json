@@ -1,0 +1,122 @@
+{
+  "project_info": {
+    "project_number": "393568702648",
+    "project_id": "safewave-371716",
+    "storage_bucket": "safewave-371716.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:393568702648:android:202082053780f47f88644d",
+        "android_client_info": {
+          "package_name": "com.safewave.forbusiness"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "393568702648-35j8je711c8eh5t2n0pokqa1ce3uc2bj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-_xQ9uEKmWWhU8uUC3rZG1omdX8Rbn8U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "393568702648-35j8je711c8eh5t2n0pokqa1ce3uc2bj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "393568702648-1v44rabu9tot6b557prtht4f2hokjclv.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.safewaveMobileApp"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:393568702648:android:2695656c17ecf0ae88644d",
+        "android_client_info": {
+          "package_name": "com.safewaveMobileApp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "393568702648-29vmth6020gcutol5bejjg4dd9q7bvms.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewaveMobileApp",
+            "certificate_hash": "e96b33545f5a9d83037fef6692dc4ca36334c121"
+          }
+        },
+        {
+          "client_id": "393568702648-j9fce6f2n6niu59jnhp95mjb94l6kbja.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewaveMobileApp",
+            "certificate_hash": "f1263b8abc5d5cc3988c65584144cdceb8249f45"
+          }
+        },
+        {
+          "client_id": "393568702648-jqcvh6r7aneijs1g2kg0jev53e97no1g.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewaveMobileApp",
+            "certificate_hash": "522c6fda51c850c780c9a3e1f1212d4bd4c05240"
+          }
+        },
+        {
+          "client_id": "393568702648-ob5ifahl7r4r82oln522alts1ingfsm2.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewaveMobileApp",
+            "certificate_hash": "089352a459741ec62389dfa4817ce56f87ff4e3f"
+          }
+        },
+        {
+          "client_id": "393568702648-s2b5sel401b8f2g9unbk0patsqelb5bh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewaveMobileApp",
+            "certificate_hash": "627a7f42b6b4245e5ff6072af6fec43ad9684002"
+          }
+        },
+        {
+          "client_id": "393568702648-35j8je711c8eh5t2n0pokqa1ce3uc2bj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-_xQ9uEKmWWhU8uUC3rZG1omdX8Rbn8U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "393568702648-35j8je711c8eh5t2n0pokqa1ce3uc2bj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "393568702648-1v44rabu9tot6b557prtht4f2hokjclv.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.safewaveMobileApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
