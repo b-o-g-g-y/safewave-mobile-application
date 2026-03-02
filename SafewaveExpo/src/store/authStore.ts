@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { AuthService } from '../services/firebase/AuthService';
 import { FirestoreService } from '../services/firebase/FirestoreService';
+import { ActivityLogService } from '../services/ActivityLogService';
 import {
   User,
   UserDocument,
@@ -13,16 +14,16 @@ import {
 interface AuthActions {
   // Initialization
   initialize: () => () => void;
-  
+
   // Auth state
   setUser: (user: User | null) => void;
   setUserDocument: (userDocument: UserDocument | null) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
-  
+
   // Auth operations
-  signInWithEmail: (data: SignInData) => Promise<void>;
+  signInWithEmail: (data: SignInData) => Promise<User>;
   signUpWithEmail: (data: SignUpData) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signInWithApple: () => Promise<void>;
@@ -107,8 +108,17 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   signInWithEmail: async (data) => {
     set({ isLoading: true, error: null });
     try {
-      await AuthService.signInWithEmail(data);
-      // Auth state listener will handle the rest
+      const user = await AuthService.signInWithEmail(data);
+      // Set user immediately so we can check verification status
+      // Auth state listener will also fire and update state
+      set({ user, isAuthenticated: true, isLoading: false });
+
+      // Log user login event (after a small delay to ensure userDocument is loaded)
+      setTimeout(() => {
+        ActivityLogService.logUserLogin().catch(console.error);
+      }, 1000);
+
+      return user;
     } catch (error) {
       const authError = error as AuthError;
       set({ error: authError.message, isLoading: false });
@@ -139,6 +149,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     try {
       await AuthService.signInWithGoogle();
       // Auth state listener will handle the rest
+
+      // Log user login event (after a small delay to ensure userDocument is loaded)
+      setTimeout(() => {
+        ActivityLogService.logUserLogin().catch(console.error);
+      }, 1000);
     } catch (error) {
       const authError = error as AuthError;
       // Don't show error for cancelled sign-in
@@ -158,6 +173,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     try {
       await AuthService.signInWithApple();
       // Auth state listener will handle the rest
+
+      // Log user login event (after a small delay to ensure userDocument is loaded)
+      setTimeout(() => {
+        ActivityLogService.logUserLogin().catch(console.error);
+      }, 1000);
     } catch (error) {
       const authError = error as AuthError;
       // Don't show error for cancelled sign-in
@@ -221,6 +241,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   signOut: async () => {
     set({ isLoading: true, error: null });
     try {
+      // Log user logout event before signing out
+      await ActivityLogService.logUserLogout().catch(console.error);
+
       await AuthService.signOut();
       // Auth state listener will handle the rest
     } catch (error) {

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Safewave Business",
+    "name": "Safewave for Business",
     "slug": "SafewaveExpo",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -20,8 +20,15 @@
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "This app uses Bluetooth to connect to your Safewave Band",
         "NSBluetoothPeripheralUsageDescription": "This app uses Bluetooth to connect to your Safewave Band",
-        "UIBackgroundModes": ["bluetooth-central"]
-      }
+        "UIBackgroundModes": [
+          "bluetooth-central"
+        ],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "com.safewave.forbusiness.refresh"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "appleTeamId": "VXLM9VZK85"
     },
     "android": {
       "package": "com.safewave.forbusiness",
@@ -36,13 +43,23 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
+        "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE",
+        "android.permission.QUERY_ALL_PACKAGES"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withFirebaseInit",
+      "./plugins/withDsym",
+      "./plugins/withNotificationListener",
+      "./plugins/withInstalledApps",
+      "./plugins/withBLEForegroundService",
       [
         "expo-build-properties",
         {
@@ -51,6 +68,11 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "db1c07f4-6c9a-4c86-b142-0f411383cef5"
+      }
+    }
   }
 }

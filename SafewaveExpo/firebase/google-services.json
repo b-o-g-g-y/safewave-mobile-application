@@ -14,6 +14,30 @@
       },
       "oauth_client": [
         {
+          "client_id": "393568702648-5ulbkm1bq4j3khnnu7j1p6ajfcoad448.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewave.forbusiness",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "393568702648-ig3dlupg0pah670vhpepp4fpsbh3f8bp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewave.forbusiness",
+            "certificate_hash": "f1263b8abc5d5cc3988c65584144cdceb8249f45"
+          }
+        },
+        {
+          "client_id": "393568702648-jo47lgtjnii8bhk4jj320vgkolqf5hpm.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.safewave.forbusiness",
+            "certificate_hash": "d88bebb9f07d4491040aa7c6d97072657dff0169"
+          }
+        },
+        {
           "client_id": "393568702648-35j8je711c8eh5t2n0pokqa1ce3uc2bj.apps.googleusercontent.com",
           "client_type": 3
         }

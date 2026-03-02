@@ -8,7 +8,8 @@ import {
   Platform,
   ScrollView,
   TouchableOpacity,
-  Animated,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Logo } from '../../components/Logo';
@@ -17,6 +18,7 @@ import { Button } from '../../components/Button';
 import { AuthTabs } from '../../components/AuthTabs';
 import { colors, spacing } from '../../theme/colors';
 import { AuthStackParamList } from '../../navigation/AuthNavigator';
+import { useAuthStore } from '../../store/authStore';
 
 type AuthScreenProps = {
   navigation: NativeStackNavigationProp<AuthStackParamList, 'Auth'>;
@@ -24,38 +26,96 @@ type AuthScreenProps = {
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   const [activeTab, setActiveTab] = useState<'signin' | 'signup'>('signin');
-  
+
   // Sign In state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  
+
   // Sign Up state
   const [name, setName] = useState('');
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  const handleLogin = () => {
-    // TODO: Implement Firebase auth
-    console.log('Login:', email, password);
-  };
+  const {
+    signInWithEmail,
+    signUpWithEmail,
+    signInWithGoogle,
+    signInWithApple,
+    isLoading,
+    clearError,
+  } = useAuthStore();
 
-  const handleSignup = () => {
-    // TODO: Implement Firebase auth signup
-    if (signupPassword !== confirmPassword) {
-      console.log('Passwords do not match');
+  const handleLogin = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'Please enter your email address');
       return;
     }
-    console.log('Signup:', name, signupEmail, signupPassword);
-    navigation.navigate('VerifyEmail', { email: signupEmail });
+    if (!password) {
+      Alert.alert('Error', 'Please enter your password');
+      return;
+    }
+
+    clearError();
+    try {
+      await signInWithEmail({ email: email.trim(), password });
+      // App.tsx will handle showing the verification screen if needed
+    } catch (err: any) {
+      Alert.alert('Login Failed', err.message || 'An error occurred');
+    }
   };
 
-  const handleGoogleAuth = () => {
-    console.log('Google auth');
+  const handleSignup = async () => {
+    if (!name.trim()) {
+      Alert.alert('Error', 'Please enter your name');
+      return;
+    }
+    if (!signupEmail.trim()) {
+      Alert.alert('Error', 'Please enter your email address');
+      return;
+    }
+    if (!signupPassword) {
+      Alert.alert('Error', 'Please enter a password');
+      return;
+    }
+    if (signupPassword !== confirmPassword) {
+      Alert.alert('Error', 'Passwords do not match');
+      return;
+    }
+
+    clearError();
+    try {
+      await signUpWithEmail({
+        email: signupEmail.trim(),
+        password: signupPassword,
+        displayName: name.trim()
+      });
+      navigation.navigate('VerifyEmail', { email: signupEmail });
+    } catch (err: any) {
+      Alert.alert('Signup Failed', err.message || 'An error occurred');
+    }
   };
 
-  const handleAppleAuth = () => {
-    console.log('Apple auth');
+  const handleGoogleAuth = async () => {
+    clearError();
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      if (err.code !== 'google-signin/cancelled') {
+        Alert.alert('Google Sign-In Failed', err.message || 'An error occurred');
+      }
+    }
+  };
+
+  const handleAppleAuth = async () => {
+    clearError();
+    try {
+      await signInWithApple();
+    } catch (err: any) {
+      if (err.code !== 'apple-signin/cancelled') {
+        Alert.alert('Apple Sign-In Failed', err.message || 'An error occurred');
+      }
+    }
   };
 
   const renderSignInForm = () => (
@@ -67,6 +127,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         keyboardType="email-address"
         autoCapitalize="none"
         autoCorrect={false}
+        editable={!isLoading}
       />
 
       <TextInput
@@ -74,15 +135,24 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         value={password}
         onChangeText={setPassword}
         isPassword
+        editable={!isLoading}
       />
 
       <TouchableOpacity
         style={styles.forgotPassword}
-        onPress={() => navigation.navigate('ForgotPassword')}>
+        onPress={() => navigation.navigate('ForgotPassword')}
+        disabled={isLoading}>
         <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
       </TouchableOpacity>
 
-      <Button title="Login" onPress={handleLogin} style={styles.submitButton} />
+      <Button
+        title={isLoading ? '' : 'Login'}
+        onPress={handleLogin}
+        style={styles.submitButton}
+        disabled={isLoading}
+      >
+        {isLoading && <ActivityIndicator color={colors.textPrimary} />}
+      </Button>
     </>
   );
 
@@ -93,6 +163,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         value={name}
         onChangeText={setName}
         autoCapitalize="words"
+        editable={!isLoading}
       />
 
       <TextInput
@@ -102,6 +173,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         keyboardType="email-address"
         autoCapitalize="none"
         autoCorrect={false}
+        editable={!isLoading}
       />
 
       <TextInput
@@ -109,6 +181,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         value={signupPassword}
         onChangeText={setSignupPassword}
         isPassword
+        editable={!isLoading}
       />
 
       <TextInput
@@ -116,13 +189,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         value={confirmPassword}
         onChangeText={setConfirmPassword}
         isPassword
+        editable={!isLoading}
       />
 
       <Button
-        title="Create Account"
+        title={isLoading ? '' : 'Create Account'}
         onPress={handleSignup}
         style={styles.submitButton}
-      />
+        disabled={isLoading}
+      >
+        {isLoading && <ActivityIndicator color={colors.textPrimary} />}
+      </Button>
     </>
   );
 
@@ -166,14 +243,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
                   icon={require('../../../assets/images/google-logo.png')}
                   onPress={handleGoogleAuth}
                   style={styles.socialButton}
+                  disabled={isLoading}
                 />
-                <Button
-                  title="Apple"
-                  variant="apple"
-                  icon={require('../../../assets/images/apple_logo.png')}
-                  onPress={handleAppleAuth}
-                  style={styles.socialButton}
-                />
+                {Platform.OS === 'ios' && (
+                  <Button
+                    title="Apple"
+                    variant="apple"
+                    icon={require('../../../assets/images/apple_logo.png')}
+                    onPress={handleAppleAuth}
+                    style={styles.socialButton}
+                    disabled={isLoading}
+                  />
+                )}
               </View>
             </View>
           </View>

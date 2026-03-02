@@ -8,6 +8,7 @@ import {
   TextInputProps as RNTextInputProps,
   ViewStyle,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '../theme/colors';
 
 interface TextInputProps extends RNTextInputProps {
@@ -42,7 +43,11 @@ export const TextInput: React.FC<TextInputProps> = ({
           <TouchableOpacity
             style={styles.eyeButton}
             onPress={() => setShowPassword(!showPassword)}>
-            <Text style={styles.eyeIcon}>{showPassword ? '👁' : '👁‍🗨'}</Text>
+            <Ionicons
+              name={showPassword ? 'eye' : 'eye-off'}
+              size={22}
+              color={colors.textSecondary}
+            />
           </TouchableOpacity>
         )}
       </View>
@@ -86,9 +91,6 @@ const styles = StyleSheet.create({
   },
   eyeButton: {
     padding: spacing.sm,
-  },
-  eyeIcon: {
-    fontSize: 20,
   },
   errorText: {
     color: colors.error,
