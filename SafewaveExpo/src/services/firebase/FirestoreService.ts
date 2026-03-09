@@ -40,6 +40,17 @@ const db = () => getFirestore();
 
 // Track which band names we've already logged "not registered" for to avoid log spam
 const bandNotRegisteredLogged = new Set<string>();
+const MAX_BATCH_WRITES = 400;
+
+const commitBatchedWrites = async (
+  operations: Array<(batch: FirebaseFirestoreTypes.WriteBatch) => void>
+): Promise<void> => {
+  for (let index = 0; index < operations.length; index += MAX_BATCH_WRITES) {
+    const batch = writeBatch(db());
+    operations.slice(index, index + MAX_BATCH_WRITES).forEach((operation) => operation(batch));
+    await batch.commit();
+  }
+};
 
 /**
  * Firestore service for all database operations (modular API)
@@ -136,29 +147,73 @@ export const FirestoreService = {
    * Delete user document and all associated data
    */
   deleteUser: async (userId: string): Promise<void> => {
-    const batch = writeBatch(db());
-
-    // Delete user document
     const userRef = doc(db(), Collections.USERS, userId);
-    batch.delete(userRef);
+    const [
+      appsSnapshot,
+      historySnapshot,
+      activityLogsSnapshot,
+      assignedBandsSnapshot,
+      assignedByBandsSnapshot,
+      registeredBandsSnapshot,
+    ] = await Promise.all([
+      getDocs(query(collection(db(), Collections.APPLICATIONS), where('userId', '==', userId))),
+      getDocs(query(collection(db(), Collections.HISTORY), where('userId', '==', userId))),
+      getDocs(query(collection(db(), Collections.ACTIVITY_LOGS), where('userId', '==', userId))),
+      getDocs(query(collection(db(), Collections.BANDS), where('assignedUserId', '==', userId))),
+      getDocs(query(collection(db(), Collections.BANDS), where('assignedBy', '==', userId))),
+      getDocs(query(collection(db(), Collections.BANDS), where('registeredBy', '==', userId))),
+    ]);
 
-    // Delete user's applications
-    const appsQuery = query(
-      collection(db(), Collections.APPLICATIONS),
-      where('userId', '==', userId)
-    );
-    const appsSnapshot = await getDocs(appsQuery);
-    appsSnapshot.docs.forEach((d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => batch.delete(d.ref));
+    const bandUpdates = new Map<string, Partial<BandDocument>>();
+    const upsertBandUpdate = (bandId: string, updates: Partial<BandDocument>) => {
+      const existingUpdates = bandUpdates.get(bandId) || {};
+      bandUpdates.set(bandId, { ...existingUpdates, ...updates });
+    };
 
-    // Delete user's history
-    const historyQuery = query(
-      collection(db(), Collections.HISTORY),
-      where('userId', '==', userId)
-    );
-    const historySnapshot = await getDocs(historyQuery);
-    historySnapshot.docs.forEach((d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => batch.delete(d.ref));
+    assignedBandsSnapshot.docs.forEach((snapshot: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
+      upsertBandUpdate(snapshot.id, {
+        assignedUserId: null,
+        assignedAt: null,
+        assignedBy: null,
+        status: 'registered',
+      });
+    });
 
-    await batch.commit();
+    assignedByBandsSnapshot.docs.forEach((snapshot: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
+      upsertBandUpdate(snapshot.id, {
+        assignedBy: null,
+      });
+    });
+
+    registeredBandsSnapshot.docs.forEach((snapshot: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
+      upsertBandUpdate(snapshot.id, {
+        registeredBy: 'deleted_account',
+      });
+    });
+
+    const operations: Array<(batch: FirebaseFirestoreTypes.WriteBatch) => void> = [
+      (batch) => batch.delete(userRef),
+    ];
+
+    appsSnapshot.docs.forEach((snapshot: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
+      operations.push((batch) => batch.delete(snapshot.ref));
+    });
+
+    historySnapshot.docs.forEach((snapshot: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
+      operations.push((batch) => batch.delete(snapshot.ref));
+    });
+
+    activityLogsSnapshot.docs.forEach((snapshot: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
+      operations.push((batch) => batch.delete(snapshot.ref));
+    });
+
+    bandUpdates.forEach((updates, bandId) => {
+      operations.push((batch) => {
+        batch.update(doc(db(), Collections.BANDS, bandId), updates);
+      });
+    });
+
+    await commitBatchedWrites(operations);
   },
 
   /**

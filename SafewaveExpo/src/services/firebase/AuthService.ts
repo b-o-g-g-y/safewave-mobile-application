@@ -1,9 +1,15 @@
 import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
+import functions from '@react-native-firebase/functions';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { appleAuth } from '@invertase/react-native-apple-authentication';
 import { Platform } from 'react-native';
 import { User, SignUpData, SignInData, AuthError } from '../../types/user';
 import { FirestoreService } from './FirestoreService';
+import { AppPresenceService } from '../AppPresenceService';
+
+const PASSWORD_PROVIDER_ID = 'password';
+const GOOGLE_PROVIDER_ID = 'google.com';
+const APPLE_PROVIDER_ID = 'apple.com';
 
 // Track if Google Sign-In is available (requires development build, not available in Expo Go)
 let isGoogleSignInAvailable = false;
@@ -32,7 +38,104 @@ const mapFirebaseUser = (firebaseUser: FirebaseAuthTypes.User): User => ({
   displayName: firebaseUser.displayName,
   photoURL: firebaseUser.photoURL,
   emailVerified: firebaseUser.emailVerified,
+  primaryProviderId: getPrimaryProviderId(firebaseUser),
 });
+
+const getGoogleIdToken = (signInResult: any): string | undefined =>
+  signInResult?.data?.idToken || signInResult?.idToken;
+
+const getPrimaryProviderId = (firebaseUser: FirebaseAuthTypes.User): string => {
+  const linkedProviderId = firebaseUser.providerData
+    .map((provider) => provider.providerId)
+    .find((providerId) => providerId && providerId !== 'firebase');
+
+  if (linkedProviderId) {
+    return linkedProviderId;
+  }
+
+  return firebaseUser.email ? PASSWORD_PROVIDER_ID : 'unknown';
+};
+
+const getRequiredUser = (): FirebaseAuthTypes.User => {
+  const user = auth().currentUser;
+
+  if (!user) {
+    throw { code: 'auth/no-user', message: 'No user is currently signed in' };
+  }
+
+  return user;
+};
+
+const reauthenticateWithPassword = async (
+  user: FirebaseAuthTypes.User,
+  password?: string
+): Promise<void> => {
+  if (!user.email) {
+    throw { code: 'auth/no-user', message: 'No user is currently signed in' };
+  }
+
+  if (!password) {
+    throw {
+      code: 'auth/missing-password',
+      message: 'Please enter your password to delete your account.',
+    };
+  }
+
+  const credential = auth.EmailAuthProvider.credential(user.email, password);
+  await user.reauthenticateWithCredential(credential);
+};
+
+const reauthenticateWithGoogle = async (user: FirebaseAuthTypes.User): Promise<void> => {
+  if (!isGoogleSignInAvailable) {
+    throw {
+      code: 'google-signin/not-available',
+      message: 'Google Sign-In requires a development build. It is not available in Expo Go.',
+    };
+  }
+
+  if (Platform.OS === 'android') {
+    await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+  }
+
+  const signInResult = await GoogleSignin.signIn();
+  const idToken = getGoogleIdToken(signInResult);
+
+  if (!idToken) {
+    throw { code: 'google-signin/no-token', message: 'Failed to get Google ID token' };
+  }
+
+  const googleCredential = auth.GoogleAuthProvider.credential(idToken);
+  await user.reauthenticateWithCredential(googleCredential);
+};
+
+const reauthenticateWithApple = async (user: FirebaseAuthTypes.User): Promise<void> => {
+  if (Platform.OS !== 'ios') {
+    throw {
+      code: 'apple-signin/not-supported',
+      message: 'Apple Sign-In account deletion is only available on iOS.',
+    };
+  }
+
+  const appleAuthRequestResponse = await appleAuth.performRequest({
+    requestedOperation: appleAuth.Operation.LOGIN,
+  });
+  const { identityToken, nonce, authorizationCode } = appleAuthRequestResponse as {
+    identityToken?: string | null;
+    nonce?: string | null;
+    authorizationCode?: string | null;
+  };
+
+  if (!identityToken) {
+    throw { code: 'apple-signin/no-token', message: 'Failed to get Apple identity token' };
+  }
+
+  const appleCredential = auth.AppleAuthProvider.credential(identityToken, nonce || undefined);
+  await user.reauthenticateWithCredential(appleCredential);
+
+  if (authorizationCode) {
+    await auth().revokeToken(authorizationCode);
+  }
+};
 
 /**
  * Parse Firebase auth errors to user-friendly messages
@@ -72,6 +175,15 @@ const parseAuthError = (error: any): AuthError => {
     case 'auth/network-request-failed':
       message = 'Network error. Please check your connection.';
       break;
+    case 'auth/requires-recent-login':
+      message = 'Please re-authenticate and try deleting your account again.';
+      break;
+    case 'auth/missing-password':
+      message = 'Please enter your password to delete your account.';
+      break;
+    case 'auth/unsupported-provider':
+      message = 'This sign-in method is not yet supported for account deletion.';
+      break;
   }
 
   return { code, message };
@@ -90,6 +202,14 @@ export const AuthService = {
   getCurrentUser: (): User | null => {
     const firebaseUser = auth().currentUser;
     return firebaseUser ? mapFirebaseUser(firebaseUser) : null;
+  },
+
+  /**
+   * Get the primary auth provider for the current user
+   */
+  getCurrentProviderId: (): string | null => {
+    const firebaseUser = auth().currentUser;
+    return firebaseUser ? getPrimaryProviderId(firebaseUser) : null;
   },
 
   /**
@@ -175,7 +295,7 @@ export const AuthService = {
       console.log('[AuthService] Step 2: idToken present:', !!signInResult?.data?.idToken);
       console.log('[AuthService] Step 2: idToken length:', signInResult?.data?.idToken?.length || 0);
 
-      const idToken = signInResult.data?.idToken;
+      const idToken = getGoogleIdToken(signInResult);
 
       if (!idToken) {
         console.log('[AuthService] Step 2: FAILED - No ID token received');
@@ -375,12 +495,8 @@ export const AuthService = {
    */
   reauthenticate: async (password: string): Promise<void> => {
     try {
-      const user = auth().currentUser;
-      if (!user || !user.email) {
-        throw { code: 'auth/no-user', message: 'No user is currently signed in' };
-      }
-      const credential = auth.EmailAuthProvider.credential(user.email, password);
-      await user.reauthenticateWithCredential(credential);
+      const user = getRequiredUser();
+      await reauthenticateWithPassword(user, password);
     } catch (error) {
       throw parseAuthError(error);
     }
@@ -389,18 +505,31 @@ export const AuthService = {
   /**
    * Delete user account
    */
-  deleteAccount: async (): Promise<void> => {
+  deleteAccount: async (password?: string): Promise<void> => {
     try {
-      const user = auth().currentUser;
-      if (!user) {
-        throw { code: 'auth/no-user', message: 'No user is currently signed in' };
+      const user = getRequiredUser();
+      const providerId = getPrimaryProviderId(user);
+
+      if (providerId === PASSWORD_PROVIDER_ID) {
+        await reauthenticateWithPassword(user, password);
+      } else if (providerId === GOOGLE_PROVIDER_ID) {
+        await reauthenticateWithGoogle(user);
+      } else if (providerId === APPLE_PROVIDER_ID) {
+        await reauthenticateWithApple(user);
+      } else {
+        throw {
+          code: 'auth/unsupported-provider',
+          message: 'This sign-in method is not yet supported for account deletion.',
+        };
       }
 
-      // Delete Firestore data first
-      await FirestoreService.deleteUser(user.uid);
+      AppPresenceService.skipNextCleanupWrite();
 
-      // Then delete the auth user
-      await user.delete();
+      // Run destructive cleanup through a trusted backend so it can bypass client rules safely.
+      await functions().httpsCallable('deleteAccount')();
+
+      // Clear the local session after the backend removes the account.
+      await AuthService.signOut();
     } catch (error) {
       throw parseAuthError(error);
     }

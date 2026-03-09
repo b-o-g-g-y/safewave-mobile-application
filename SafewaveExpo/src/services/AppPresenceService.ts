@@ -24,6 +24,16 @@ export const AppPresenceService = {
   _appStateSubscription: null as ReturnType<typeof AppState.addEventListener> | null,
   _isInitialized: false,
   _currentAppState: AppState.currentState,
+  _skipNextCleanupWrite: false,
+
+  /**
+   * Skip the next "mark app closed" write.
+   * Useful during account deletion/logout transitions where the user doc
+   * may already be gone before React effects finish cleaning up.
+   */
+  skipNextCleanupWrite: (): void => {
+    AppPresenceService._skipNextCleanupWrite = true;
+  },
 
   /**
    * Initialize presence tracking for a user
@@ -69,12 +79,13 @@ export const AppPresenceService = {
     }
 
     // Mark app as closed (best effort - may not run if app is force-killed)
-    if (AppPresenceService._userId) {
+    if (AppPresenceService._userId && !AppPresenceService._skipNextCleanupWrite) {
       AppPresenceService._markAppClosed();
     }
 
     AppPresenceService._userId = null;
     AppPresenceService._isInitialized = false;
+    AppPresenceService._skipNextCleanupWrite = false;
   },
 
   /**

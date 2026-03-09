@@ -10,6 +10,7 @@ import {
   Linking,
   Platform,
   Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -29,9 +30,11 @@ type AccountScreenNavigationProp = NativeStackNavigationProp<AccountStackParamLi
 
 export const AccountScreen: React.FC = () => {
   const navigation = useNavigation<AccountScreenNavigationProp>();
-  const { user, userDocument, signOut } = useAuthStore();
+  const { user, userDocument, signOut, deleteAccount, isLoading } = useAuthStore();
   const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [notificationSettingsVisible, setNotificationSettingsVisible] = useState(false);
+  const [deleteAccountVisible, setDeleteAccountVisible] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
 
   // Check if user has organization data
   const hasOrganization = Boolean(userDocument?.organizationId);
@@ -39,6 +42,8 @@ export const AccountScreen: React.FC = () => {
   // User is admin if role is 'org_admin' or 'super_admin'
   const isAdmin = userDocument?.role === 'org_admin' || userDocument?.role === 'super_admin';
   const isAndroid = Platform.OS === 'android';
+  const deleteProviderId = user?.primaryProviderId || 'password';
+  const requiresDeletePassword = deleteProviderId === 'password';
 
   const handleSignOut = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
@@ -79,6 +84,33 @@ export const AccountScreen: React.FC = () => {
     setNotificationSettingsVisible(false);
   };
 
+  const handleOpenDeleteAccount = () => {
+    setDeletePassword('');
+    setDeleteAccountVisible(true);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (requiresDeletePassword && !deletePassword.trim()) {
+      Alert.alert('Password Required', 'Please enter your password to delete your account.');
+      return;
+    }
+
+    try {
+      await deleteAccount(requiresDeletePassword ? deletePassword : undefined);
+      setDeleteAccountVisible(false);
+      setDeletePassword('');
+    } catch (error: any) {
+      if (
+        error?.code === 'google-signin/cancelled' ||
+        error?.code === 'apple-signin/cancelled'
+      ) {
+        return;
+      }
+
+      Alert.alert('Error', error.message || 'Failed to delete account');
+    }
+  };
+
   // Get initials from name or email
   const getInitials = (): string => {
     const name = userDocument?.displayName || user?.displayName || user?.email || '';
@@ -93,6 +125,12 @@ export const AccountScreen: React.FC = () => {
 
   const displayName = userDocument?.displayName || user?.displayName || 'User';
   const email = user?.email || '';
+  const deleteProviderName =
+    deleteProviderId === 'google.com'
+      ? 'Google'
+      : deleteProviderId === 'apple.com'
+        ? 'Apple'
+        : 'your password';
 
   return (
     <ImageBackground
@@ -196,9 +234,20 @@ export const AccountScreen: React.FC = () => {
           </View>
 
           {/* Sign Out Button */}
-          <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
+          <TouchableOpacity
+            style={[styles.signOutButton, isLoading && styles.destructiveButtonDisabled]}
+            onPress={handleSignOut}
+            disabled={isLoading}>
             <Ionicons name="log-out-outline" size={22} color={colors.error} />
             <Text style={styles.signOutText}>Sign Out</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.deleteAccountButton, isLoading && styles.destructiveButtonDisabled]}
+            onPress={handleOpenDeleteAccount}
+            disabled={isLoading}>
+            <Ionicons name="trash-outline" size={22} color={colors.error} />
+            <Text style={styles.deleteAccountText}>Delete Account</Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
@@ -248,6 +297,71 @@ export const AccountScreen: React.FC = () => {
           </View>
         </Modal>
       )}
+
+      <Modal
+        visible={deleteAccountVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setDeleteAccountVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Delete Account</Text>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setDeleteAccountVisible(false)}
+                disabled={isLoading}>
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalBody}>
+              <View style={styles.deleteIconContainer}>
+                <Ionicons name="warning-outline" size={64} color={colors.error} />
+              </View>
+              <Text style={styles.modalDescription}>
+                Deleting your account is permanent. Your Safewave login and associated account data
+                will be removed.
+              </Text>
+              <Text style={styles.deleteHelpText}>
+                {requiresDeletePassword
+                  ? 'Enter your current password to confirm this action.'
+                  : `You will be asked to re-authenticate with ${deleteProviderName} before deletion continues.`}
+              </Text>
+              {requiresDeletePassword && (
+                <TextInput
+                  style={styles.deletePasswordInput}
+                  value={deletePassword}
+                  onChangeText={setDeletePassword}
+                  placeholder="Current password"
+                  placeholderTextColor={colors.textMuted}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isLoading}
+                />
+              )}
+            </View>
+
+            <View style={styles.deleteModalActions}>
+              <TouchableOpacity
+                style={styles.deleteCancelButton}
+                onPress={() => setDeleteAccountVisible(false)}
+                disabled={isLoading}>
+                <Text style={styles.deleteCancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.deleteConfirmButton, isLoading && styles.destructiveButtonDisabled]}
+                onPress={handleDeleteAccount}
+                disabled={isLoading}>
+                <Text style={styles.deleteConfirmButtonText}>
+                  {isLoading ? 'Deleting...' : 'Delete Account'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ImageBackground>
   );
 };
@@ -393,6 +507,26 @@ const styles = StyleSheet.create({
     color: colors.error,
     marginLeft: spacing.sm,
   },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    marginTop: spacing.md,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.error,
+    backgroundColor: 'rgba(244, 67, 54, 0.08)',
+  },
+  deleteAccountText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.error,
+    marginLeft: spacing.sm,
+  },
+  destructiveButtonDisabled: {
+    opacity: 0.6,
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -439,6 +573,61 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  deleteIconContainer: {
+    marginBottom: spacing.lg,
+  },
+  deleteHelpText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: spacing.md,
+  },
+  deletePasswordInput: {
+    width: '100%',
+    marginTop: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    color: colors.textPrimary,
+    backgroundColor: colors.surface,
+  },
+  deleteModalActions: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  deleteCancelButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  deleteCancelButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  deleteConfirmButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.error,
+  },
+  deleteConfirmButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textPrimary,
   },
   openSettingsButton: {
     flexDirection: 'row',

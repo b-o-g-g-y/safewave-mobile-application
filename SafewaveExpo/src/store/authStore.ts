@@ -31,6 +31,7 @@ interface AuthActions {
   sendEmailVerification: () => Promise<void>;
   checkEmailVerification: () => Promise<boolean>;
   signOut: () => Promise<void>;
+  deleteAccount: (password?: string) => Promise<void>;
 }
 
 type AuthStore = AuthState & AuthActions;
@@ -246,6 +247,21 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       await AuthService.signOut();
       // Auth state listener will handle the rest
+    } catch (error) {
+      const authError = error as AuthError;
+      set({ error: authError.message, isLoading: false });
+      throw error;
+    }
+  },
+
+  /**
+   * Delete the current account
+   */
+  deleteAccount: async (password) => {
+    set({ isLoading: true, error: null });
+    try {
+      await AuthService.deleteAccount(password);
+      // Auth state listener will clear local state after deletion succeeds.
     } catch (error) {
       const authError = error as AuthError;
       set({ error: authError.message, isLoading: false });
