@@ -33,12 +33,17 @@ export const VerifyEmailScreen: React.FC<VerifyEmailScreenProps> = ({
 
   // Check verification status periodically
   useEffect(() => {
-    const interval = setInterval(async () => {
-      const isVerified = await checkEmailVerification();
-      if (isVerified) {
-        // User email is verified, navigation will be handled by App.tsx
-        clearInterval(interval);
-      }
+    const interval = setInterval(() => {
+      checkEmailVerification()
+        .then((isVerified) => {
+          if (isVerified) {
+            // User email is verified, navigation will be handled by App.tsx
+            clearInterval(interval);
+          }
+        })
+        .catch((err) => {
+          console.error('[VerifyEmail] Verification check failed:', err);
+        });
     }, 5000); // Check every 5 seconds
 
     return () => clearInterval(interval);

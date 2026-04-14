@@ -182,8 +182,11 @@ export const AppSelectionModal: React.FC<AppSelectionModalProps> = ({
         return;
       }
 
-      // Get non-system apps only
-      const installedApps: AndroidInstalledApp[] = await RNInstalledApplication.getNonSystemApps();
+      // Get all launchable apps (visible in the app drawer — includes pre-installed
+      // apps like Phone/Messages/Chrome, but excludes invisible system services).
+      // Fall back to getNonSystemApps on older builds of the native module.
+      const fetcher = RNInstalledApplication.getLaunchableApps ?? RNInstalledApplication.getNonSystemApps;
+      const installedApps: AndroidInstalledApp[] = await fetcher();
       
       const formattedApps: AppInfo[] = installedApps.map(app => ({
         name: app.appName,

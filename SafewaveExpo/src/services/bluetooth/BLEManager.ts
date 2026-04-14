@@ -86,6 +86,14 @@ let restoredDeviceCallback: ((deviceId: string) => void) | null = null;
 // Connected device reference
 let connectedDevice: Device | null = null;
 
+// Incremented each time a new connection is established.
+// Used to detect stale disconnect callbacks from previous connections.
+let connectionGeneration = 0;
+
+// Callback fired when a subscription error suggests the device disconnected
+// but the onDeviceDisconnected handler hasn't fired yet.
+let subscriptionErrorCallback: (() => void) | null = null;
+
 // Battery subscription reference
 let batterySubscription: { remove: () => void } | null = null;
 
@@ -572,8 +580,9 @@ export const BLEManager = {
         }
       }
 
-      // Store connected device
+      // Store connected device and bump generation to invalidate old disconnect handlers
       connectedDevice = device;
+      connectionGeneration += 1;
 
       // Subscribe to battery updates (with retry in case pairing is still settling)
       if (onBatteryUpdate) {
@@ -716,19 +725,22 @@ export const BLEManager = {
       BATTERY_CHAR_UUID,
       (error, characteristic) => {
         if (error) {
-          // Check if this is an expected disconnection error
           const errorMessage = error.message || '';
           const isDisconnectionError =
             errorMessage.includes('disconnected') ||
             errorMessage.includes('cancelled') ||
             errorMessage.includes('powered off') ||
+            errorMessage.includes('notify change failed') ||
             error.errorCode === 201 || // Device disconnected
             error.errorCode === 2;     // Operation cancelled
 
           if (!isDisconnectionError) {
             console.error('Battery subscription error:', error);
           }
-          // Silently ignore disconnection errors - they're expected when user disconnects
+          // Notify that device likely disconnected — backup for when onDeviceDisconnected doesn't fire
+          if (subscriptionErrorCallback) {
+            subscriptionErrorCallback();
+          }
           return;
         }
 
@@ -833,11 +845,16 @@ export const BLEManager = {
             errorMessage.includes('disconnected') ||
             errorMessage.includes('cancelled') ||
             errorMessage.includes('powered off') ||
+            errorMessage.includes('notify change failed') ||
             error.errorCode === 201 || // Device disconnected
             error.errorCode === 2;     // Operation cancelled
 
           if (!isDisconnectionError) {
             console.error('[BLE] Notification subscription error:', error);
+          }
+          // Notify that device likely disconnected — backup for when onDeviceDisconnected doesn't fire
+          if (subscriptionErrorCallback) {
+            subscriptionErrorCallback();
           }
           return;
         }
@@ -847,15 +864,26 @@ export const BLEManager = {
           const bytes = base64ToBytes(characteristic.value);
 
           if (bytes.length >= 1) {
-            // Convert bytes to string (same as String.fromCharCodes in Dart)
-            const notificationData = String.fromCharCode(...bytes);
+            try {
+              // Convert bytes to string chunk-by-chunk to avoid stack overflow
+              // from spread operator on large arrays
+              let notificationData = '';
+              const chunkSize = 8192;
+              for (let i = 0; i < bytes.length; i += chunkSize) {
+                notificationData += String.fromCharCode(
+                  ...bytes.slice(i, Math.min(i + chunkSize, bytes.length))
+                );
+              }
 
-            console.log('[BLE] ========== NOTIFICATION RECEIVED ==========');
-            console.log('[BLE] Raw bytes:', bytes);
-            console.log('[BLE] Parsed string:', notificationData);
-            console.log('[BLE] =============================================');
+              console.log('[BLE] ========== NOTIFICATION RECEIVED ==========');
+              console.log('[BLE] Raw bytes:', bytes);
+              console.log('[BLE] Parsed string:', notificationData);
+              console.log('[BLE] =============================================');
 
-            callback(notificationData);
+              callback(notificationData);
+            } catch (parseError) {
+              console.error('[BLE] Failed to parse notification bytes:', parseError);
+            }
           }
         }
       }
@@ -946,6 +974,19 @@ export const BLEManager = {
 
     // Retry loop
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // Check device is still connected before each attempt
+      if (!connectedDevice) {
+        throw new Error('Device disconnected during app settings write');
+      }
+      try {
+        const stillConnected = await connectedDevice.isConnected();
+        if (!stillConnected) {
+          throw new Error('Device disconnected during app settings write');
+        }
+      } catch (checkError: any) {
+        throw new Error('Device disconnected during app settings write');
+      }
+
       try {
         console.log(`[BLE] Writing app settings attempt ${attempt + 1}/${maxRetries}...`);
 
@@ -972,6 +1013,11 @@ export const BLEManager = {
       } catch (error: any) {
         console.error(`[BLE] Error writing app settings (attempt ${attempt + 1}):`, error.message);
 
+        // If device disconnected, don't retry
+        if (error.message?.includes('disconnected')) {
+          throw error;
+        }
+
         if (attempt < maxRetries - 1) {
           // Wait before retrying
           await new Promise(resolve => setTimeout(resolve, retryDelayMs));
@@ -987,13 +1033,15 @@ export const BLEManager = {
    * Send a vibration command to the band
    */
   vibrate: async (command: VibrationCommand): Promise<void> => {
-    if (!connectedDevice) {
+    // Capture device reference to avoid null between check and write
+    const device = connectedDevice;
+    if (!device) {
       throw new Error('No device connected');
     }
 
     // Verify the native connection is still alive to avoid NullPointerException
     try {
-      const stillConnected = await connectedDevice.isConnected();
+      const stillConnected = await device.isConnected();
       if (!stillConnected) {
         throw new Error('Device is no longer connected');
       }
@@ -1013,8 +1061,8 @@ export const BLEManager = {
       // Encode to base64
       const base64Data = bytesToBase64(data);
 
-      // Write to vibration characteristic
-      await connectedDevice.writeCharacteristicWithResponseForService(
+      // Write to vibration characteristic using captured reference
+      await device.writeCharacteristicWithResponseForService(
         MAIN_SERVICE_UUID,
         VIBRATION_CHAR_UUID,
         base64Data
@@ -1071,8 +1119,15 @@ export const BLEManager = {
           console.log('[BLE] Firmware version read:', version);
           return version;
         } else if (bytes.length > 0) {
-          // Fallback: try to parse as string
-          const versionStr = String.fromCharCode(...bytes).trim();
+          // Fallback: try to parse as string (chunk to avoid stack overflow)
+          let versionStr = '';
+          const chunkSize = 8192;
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            versionStr += String.fromCharCode(
+              ...bytes.slice(i, Math.min(i + chunkSize, bytes.length))
+            );
+          }
+          versionStr = versionStr.trim();
           console.log('[BLE] Firmware version (string):', versionStr);
           return versionStr;
         }
@@ -1208,15 +1263,48 @@ export const BLEManager = {
       return () => { };
     }
 
+    const deviceId = connectedDevice.id;
+    // Capture device info before disconnect in case the native object becomes invalid
+    const cachedDevice = mapDevice(connectedDevice);
+    // Capture generation at subscription time to detect stale callbacks
+    const gen = connectionGeneration;
+
     const subscription = manager.onDeviceDisconnected(
-      connectedDevice.id,
+      deviceId,
       (error, device) => {
-        if (error) {
-          console.log('[BLE] Disconnect reason:', error.message, '| code:', error.errorCode, '| reason:', error.reason);
-        }
-        if (device) {
+        try {
+          if (error) {
+            console.log('[BLE] Disconnect reason:', error.message, '| code:', error.errorCode, '| reason:', error.reason);
+          }
+
+          // If a new connection was established since this monitor was created,
+          // this is a stale callback — ignore it to avoid clearing the new connection.
+          if (connectionGeneration !== gen) {
+            console.log('[BLE] Ignoring stale disconnect callback (gen', gen, 'vs current', connectionGeneration + ')');
+            return;
+          }
+
+          // CRITICAL: Remove BLE subscriptions IMMEDIATELY before anything else.
+          // react-native-ble-plx has a bug where monitorCharacteristic's onError
+          // calls PromiseImpl.reject with a null code, causing a native crash.
+          // By removing subscriptions here, we prevent the library from propagating
+          // the disconnect error through the monitor callbacks.
+          if (batterySubscription) {
+            try { batterySubscription.remove(); } catch (_) {}
+            batterySubscription = null;
+          }
+          if (notificationSubscription) {
+            try { notificationSubscription.remove(); } catch (_) {}
+            notificationSubscription = null;
+          }
+
           connectedDevice = null;
-          callback(mapDevice(device));
+          callback(device ? mapDevice(device) : cachedDevice);
+        } catch (callbackError) {
+          console.error('[BLE] Disconnect callback error:', callbackError);
+          if (connectionGeneration === gen) {
+            connectedDevice = null;
+          }
         }
       }
     );
@@ -1229,6 +1317,14 @@ export const BLEManager = {
    * When iOS relaunches the app to restore a BLE session, this callback
    * receives the device ID so the store can reconnect.
    */
+  /**
+   * Register a callback for when a subscription error suggests disconnect.
+   * Acts as a backup when onDeviceDisconnected doesn't fire.
+   */
+  onSubscriptionError: (callback: (() => void) | null): void => {
+    subscriptionErrorCallback = callback;
+  },
+
   onDeviceRestored: (callback: (deviceId: string) => void): void => {
     restoredDeviceCallback = callback;
   },

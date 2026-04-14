@@ -1,5 +1,4 @@
 import { FirestoreService } from './firebase/FirestoreService';
-import { useAuthStore } from '../store/authStore';
 import { ActivityLogType, ActivityLogMetadata } from '../types/user';
 
 /**
@@ -18,6 +17,8 @@ export const ActivityLogService = {
     userEmail: string;
     organizationId: string;
   } | null => {
+    // Lazy import to break circular dependency: authStore -> ActivityLogService -> authStore
+    const { useAuthStore } = require('../store/authStore');
     const { user, userDocument } = useAuthStore.getState();
 
     if (!user || !userDocument) {
@@ -29,7 +30,7 @@ export const ActivityLogService = {
     const organizationId = userDocument.organizationId;
 
     if (!userEmail || !organizationId) {
-      console.warn('[ActivityLogService] Cannot log event - missing userEmail:', userEmail, 'organizationId:', organizationId, 'userDoc keys:', Object.keys(userDocument));
+      console.warn('[ActivityLogService] Cannot log event - missing userEmail:', userEmail, 'organizationId:', organizationId, 'userDoc keys:', userDocument ? Object.keys(userDocument) : 'null');
       return null;
     }
 

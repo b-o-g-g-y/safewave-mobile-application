@@ -494,7 +494,10 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
           ) {
             BLEManager.stopScan();
             set({ isScanning: false });
-            get().connect(device.id).catch(() => undefined);
+            get().connect(device.id).catch((err) => {
+              console.log('[BLE Store] Auto-connect from scan failed:', err?.message || err);
+              set({ connectionState: 'idle' });
+            });
             return;
           }
         }
@@ -590,7 +593,10 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
           ) {
             BLEManager.stopScan();
             set({ isScanning: false });
-            get().connect(device.id).catch(() => undefined);
+            get().connect(device.id).catch((err) => {
+              console.log('[BLE Store] Auto-connect from unfiltered scan failed:', err?.message || err);
+              set({ connectionState: 'idle' });
+            });
             return;
           }
         }
@@ -733,9 +739,10 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
         }
       });
 
-      // If the timeout already fired, bail out
+      // If the timeout already fired, bail out and clean up
       if (connectTimedOut) {
-        console.log('[BLE Store] Connect completed but timeout already fired, aborting');
+        console.log('[BLE Store] Connect completed but timeout already fired, disconnecting stale connection');
+        BLEManager.disconnect().catch(() => {});
         return;
       }
 
@@ -834,67 +841,128 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
 
       // Monitor disconnection (one-shot: only fires once per connection)
       disconnectSubscription = BLEManager.onDeviceDisconnected(() => {
-        // Prevent this handler from firing more than once
-        if (disconnectHandled) {
-          console.log('[BLE Store] Disconnect handler already fired, ignoring duplicate');
-          return;
-        }
-        disconnectHandled = true;
-
-        console.log('[BLE Store] Device disconnected');
-        const disconnectedDevice = get().connectedDevice;
-        const currentBattery = get().batteryLevel;
-        get().stopBandHeartbeat();
-
-        // Clean up this subscription immediately
-        if (disconnectSubscription) {
-          disconnectSubscription();
-          disconnectSubscription = null;
-        }
-
-        set({
-          connectionState: 'idle',
-          connectedDevice: null,
-          batteryLevel: null,
-          isCharging: false,
-          firmwareVersion: null,
-        });
-
-        // Log disconnection event
-        if (disconnectedDevice?.name) {
-          ActivityLogService.logBandDisconnected(disconnectedDevice.name, 'connection_lost');
-
-          // Update band status in Firebase
-          const { userDocument } = useAuthStore.getState();
-          if (userDocument?.organizationId) {
-            FirestoreService.updateBandStatus(
-              disconnectedDevice.name,
-              userDocument.organizationId,
-              {
-                lastDisconnected: true,
-                isConnected: false,
-                batteryLevel: currentBattery,
-              }
-            ).catch(console.error);
+        try {
+          // Prevent this handler from firing more than once
+          if (disconnectHandled) {
+            console.log('[BLE Store] Disconnect handler already fired, ignoring duplicate');
+            return;
           }
-        }
+          disconnectHandled = true;
 
-        if (!manualDisconnectInProgress) {
-          // Update the foreground notification to show reconnecting state
-          const reconnectName = disconnectedDevice?.name || 'Safewave Band';
-          ForegroundServiceManager.updateService(reconnectName, 'reconnecting');
+          console.log('[BLE Store] Device disconnected');
+          const disconnectedDevice = get().connectedDevice;
+          const currentBattery = get().batteryLevel;
+          get().stopBandHeartbeat();
 
-          get().startAutoReconnect(disconnectedDevice?.id, disconnectedDevice?.name || undefined);
-        } else {
-          // Manual disconnect — stop the foreground service entirely
-          ForegroundServiceManager.stopService();
+          // Clean up this subscription immediately
+          if (disconnectSubscription) {
+            try {
+              disconnectSubscription();
+            } catch (cleanupError) {
+              console.log('[BLE Store] Disconnect subscription cleanup error:', cleanupError);
+            }
+            disconnectSubscription = null;
+          }
+
+          set({
+            connectionState: 'idle',
+            connectedDevice: null,
+            batteryLevel: null,
+            isCharging: false,
+            firmwareVersion: null,
+          });
+
+          // Log disconnection event
+          if (disconnectedDevice?.name) {
+            ActivityLogService.logBandDisconnected(disconnectedDevice.name, 'connection_lost').catch(console.error);
+
+            // Update band status in Firebase
+            const { userDocument } = useAuthStore.getState();
+            if (userDocument?.organizationId) {
+              FirestoreService.updateBandStatus(
+                disconnectedDevice.name,
+                userDocument.organizationId,
+                {
+                  lastDisconnected: true,
+                  isConnected: false,
+                  batteryLevel: currentBattery,
+                }
+              ).catch(console.error);
+            }
+          }
+
+          if (!manualDisconnectInProgress) {
+            // Update the foreground notification to show reconnecting state
+            const reconnectName = disconnectedDevice?.name || 'Safewave Band';
+            try {
+              ForegroundServiceManager.updateService(reconnectName, 'reconnecting');
+            } catch (fgError) {
+              console.error('[BLE Store] ForegroundService update failed:', fgError);
+            }
+
+            get().startAutoReconnect(disconnectedDevice?.id, disconnectedDevice?.name || undefined);
+          } else {
+            // Manual disconnect — stop the foreground service entirely
+            try {
+              ForegroundServiceManager.stopService();
+            } catch (fgError) {
+              console.error('[BLE Store] ForegroundService stop failed:', fgError);
+            }
+          }
+        } catch (error) {
+          console.error('[BLE Store] Disconnect handler crashed:', error);
+          // Ensure state is reset even if handler crashes
+          set({
+            connectionState: 'idle',
+            connectedDevice: null,
+            batteryLevel: null,
+            isCharging: false,
+            firmwareVersion: null,
+          });
         }
       });
 
       // Clear the timeout since we completed successfully
       clearTimeout(connectTimeoutId);
 
-      if (connectTimedOut) return;
+      if (connectTimedOut) {
+        BLEManager.disconnect().catch(() => {});
+        return;
+      }
+
+      // Register backup disconnect detection via subscription errors.
+      // If the battery or notification subscription errors out but onDeviceDisconnected
+      // doesn't fire, this triggers the disconnect handler as a fallback.
+      BLEManager.onSubscriptionError(() => {
+        const { connectionState: currentState } = get();
+        if (currentState === 'connected' && !disconnectHandled) {
+          console.log('[BLE Store] Subscription error detected disconnect — triggering disconnect handler');
+          // Simulate disconnect by checking connection and handling if dead
+          BLEManager.isConnected().then((connected) => {
+            if (!connected && !disconnectHandled) {
+              disconnectHandled = true;
+              const disconnectedDevice = get().connectedDevice;
+              const currentBattery = get().batteryLevel;
+              get().stopBandHeartbeat();
+
+              set({
+                connectionState: 'idle',
+                connectedDevice: null,
+                batteryLevel: null,
+                isCharging: false,
+                firmwareVersion: null,
+              });
+
+              if (!manualDisconnectInProgress) {
+                try {
+                  ForegroundServiceManager.updateService(disconnectedDevice?.name || 'Safewave Band', 'reconnecting');
+                } catch (_) {}
+                get().startAutoReconnect(disconnectedDevice?.id, disconnectedDevice?.name || undefined);
+              }
+            }
+          }).catch(() => {});
+        }
+      });
 
       console.log('[BLE Store] Step 5: Setting connected state');
       set({
@@ -908,7 +976,7 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
 
       // Log successful connection
       const bandName = device.name || 'Unknown Band';
-      ActivityLogService.logBandConnected(bandName);
+      ActivityLogService.logBandConnected(bandName).catch(console.error);
 
       // Update band status in Firebase (lastConnected)
       const { userDocument } = useAuthStore.getState();
@@ -928,17 +996,21 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
       get().startBandHeartbeat();
 
       // Start Android foreground service to keep the process alive in background
-      ForegroundServiceManager.startService(bandName);
+      try {
+        ForegroundServiceManager.startService(bandName);
+      } catch (fgError) {
+        console.error('[BLE Store] ForegroundService start failed:', fgError);
+      }
       console.log('[BLE Store] Connection flow complete — state: connected');
     } catch (error: any) {
       clearTimeout(connectTimeoutId);
       if (!connectTimedOut) {
-        console.log('[BLE Store] Connect failed:', error.message);
+        console.log('[BLE Store] Connect failed:', error?.message || error);
         set({
           connectionState: 'idle',
           // Only show error for manual connections; during auto-reconnect
           // the retry loop handles it silently.
-          error: isReconnect ? null : (error.message || 'Failed to connect'),
+          error: isReconnect ? null : (error?.message || 'Failed to connect'),
         });
       }
       throw error;
@@ -954,6 +1026,7 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
 
     set({ connectionState: 'disconnecting' });
     manualDisconnectInProgress = true;
+    reconnectInFlight = false;
     get().stopBandHeartbeat();
     get().stopAutoReconnect();
 

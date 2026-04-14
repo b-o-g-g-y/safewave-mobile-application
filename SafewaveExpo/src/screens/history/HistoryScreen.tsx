@@ -93,7 +93,7 @@ export const HistoryScreen: React.FC = () => {
         appName: doc.appName,
         bundleId: doc.bundleIdentifier,
         message: doc.message,
-        date: doc.date?.toDate() || new Date(),
+        date: doc.date ? doc.date.toDate() : new Date(),
       }));
       setHistory(items);
       setIsLoading(false);
@@ -132,7 +132,7 @@ export const HistoryScreen: React.FC = () => {
         appName: doc.appName,
         bundleId: doc.bundleIdentifier,
         message: doc.message,
-        date: doc.date?.toDate() || new Date(),
+        date: doc.date ? doc.date.toDate() : new Date(),
       }));
       setHistory(items);
     } catch (error) {

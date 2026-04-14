@@ -14,6 +14,44 @@ import { AppPresenceService } from './src/services/AppPresenceService';
 import { BLEManager } from './src/services/bluetooth/BLEManager';
 import { colors, spacing } from './src/theme/colors';
 
+// Global error boundary to prevent white screen crashes in production
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[ErrorBoundary] Uncaught error:', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#00151E', padding: 24 }}>
+          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '600', marginBottom: 12 }}>
+            Something went wrong
+          </Text>
+          <Text style={{ color: '#B0B0B0', fontSize: 14, textAlign: 'center', marginBottom: 24 }}>
+            The app encountered an unexpected error. Please restart the app.
+          </Text>
+          <TouchableOpacity
+            style={{ backgroundColor: '#1DAAE1', paddingVertical: 12, paddingHorizontal: 32, borderRadius: 8 }}
+            onPress={() => this.setState({ hasError: false })}
+          >
+            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // Loading screen component
 const LoadingScreen = () => (
   <View style={styles.loadingContainer}>
@@ -242,12 +280,14 @@ const AppContent = () => {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <NavigationContainer>
-        <StatusBar style="light" />
-        <AppContent />
-      </NavigationContainer>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider>
+        <NavigationContainer>
+          <StatusBar style="light" />
+          <AppContent />
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
 

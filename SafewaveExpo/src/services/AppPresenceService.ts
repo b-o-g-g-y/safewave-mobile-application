@@ -50,7 +50,9 @@ export const AppPresenceService = {
     AppPresenceService._isInitialized = true;
 
     // Mark app as open immediately
-    AppPresenceService._markAppOpen();
+    AppPresenceService._markAppOpen().catch((error) => {
+      console.error('[AppPresenceService] Failed to mark app open on init:', error);
+    });
 
     // Start heartbeat interval
     AppPresenceService._startHeartbeat();
@@ -80,7 +82,9 @@ export const AppPresenceService = {
 
     // Mark app as closed (best effort - may not run if app is force-killed)
     if (AppPresenceService._userId && !AppPresenceService._skipNextCleanupWrite) {
-      AppPresenceService._markAppClosed();
+      AppPresenceService._markAppClosed().catch((error) => {
+        console.error('[AppPresenceService] Failed to mark app closed on cleanup:', error);
+      });
     }
 
     AppPresenceService._userId = null;
@@ -107,7 +111,9 @@ export const AppPresenceService = {
       nextAppState === 'active'
     ) {
       console.log('[AppPresenceService] App came to foreground');
-      AppPresenceService._markAppOpen();
+      AppPresenceService._markAppOpen().catch((error) => {
+        console.error('[AppPresenceService] Failed to mark app open on foreground:', error);
+      });
       // Heartbeat continues running, no need to restart
     }
 
@@ -131,7 +137,9 @@ export const AppPresenceService = {
 
     console.log('[AppPresenceService] Starting heartbeat interval');
     AppPresenceService._heartbeatInterval = setInterval(() => {
-      AppPresenceService._sendHeartbeat();
+      AppPresenceService._sendHeartbeat().catch((error) => {
+        console.error('[AppPresenceService] Heartbeat failed:', error);
+      });
     }, HEARTBEAT_INTERVAL_MS);
   },
 

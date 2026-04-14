@@ -77,9 +77,10 @@ export const HelpSupportScreen: React.FC = () => {
     } catch (error: any) {
       let errorMessage = 'Failed to submit form. Please try again later or contact us via email.';
       
-      if (error.toString().includes('permission-denied')) {
+      const errorStr = error?.message || String(error || '');
+      if (errorStr.includes('permission-denied')) {
         errorMessage = 'Unable to submit form due to permission settings. Please try contacting us via email instead.';
-      } else if (error.toString().includes('network')) {
+      } else if (errorStr.includes('network')) {
         errorMessage = 'No internet connection available. Please check your connection and try again.';
       }
 

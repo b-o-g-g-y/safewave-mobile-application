@@ -35,9 +35,11 @@ function createInstalledAppsModule(config, projectRoot) {
 
       const moduleContent = `package ${packageName};
 
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
@@ -57,7 +59,9 @@ import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Native module to get installed applications on Android
@@ -131,6 +135,69 @@ public class RNInstalledApplicationModule extends ReactContextBaseJavaModule {
         } catch (Exception e) {
             Log.e(TAG, "Error getting installed apps", e);
             promise.reject("ERROR", "Failed to get installed apps: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Get all launchable apps (apps that appear in the app drawer).
+     * Includes pre-installed apps like Phone, Messages, Chrome, Gmail,
+     * but excludes invisible system services.
+     */
+    @ReactMethod
+    public void getLaunchableApps(Promise promise) {
+        try {
+            PackageManager pm = getReactApplicationContext().getPackageManager();
+            String ownPackage = getReactApplicationContext().getPackageName();
+
+            Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+            launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+
+            List<ResolveInfo> resolveInfos = pm.queryIntentActivities(launcherIntent, 0);
+            Log.d(TAG, "Launchable activities found: " + resolveInfos.size());
+
+            List<AppInfo> apps = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+
+            for (ResolveInfo ri : resolveInfos) {
+                if (ri.activityInfo == null) continue;
+                ApplicationInfo appInfo = ri.activityInfo.applicationInfo;
+                if (appInfo == null) continue;
+
+                String packageName = appInfo.packageName;
+
+                if (packageName.equals(ownPackage)) continue;
+                if (!seen.add(packageName)) continue;
+
+                try {
+                    String appName = pm.getApplicationLabel(appInfo).toString();
+                    String iconBase64 = getAppIconBase64(pm, appInfo);
+                    apps.add(new AppInfo(appName, packageName, iconBase64));
+                } catch (Exception e) {
+                    Log.w(TAG, "Error getting info for package: " + packageName, e);
+                }
+            }
+
+            Collections.sort(apps, new Comparator<AppInfo>() {
+                @Override
+                public int compare(AppInfo a1, AppInfo a2) {
+                    return a1.appName.compareToIgnoreCase(a2.appName);
+                }
+            });
+
+            WritableArray appList = Arguments.createArray();
+            for (AppInfo app : apps) {
+                WritableMap appMap = Arguments.createMap();
+                appMap.putString("appName", app.appName);
+                appMap.putString("packageName", app.packageName);
+                appMap.putString("icon", app.iconBase64);
+                appList.pushMap(appMap);
+            }
+
+            Log.d(TAG, "Launchable apps returned: " + apps.size());
+            promise.resolve(appList);
+        } catch (Exception e) {
+            Log.e(TAG, "Error getting launchable apps", e);
+            promise.reject("ERROR", "Failed to get launchable apps: " + e.getMessage(), e);
         }
     }
 

@@ -78,7 +78,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
         // Subscribe to user document
         userDocUnsubscribe = FirestoreService.subscribeToUser(user.uid, (userDocument) => {
-          set({ userDocument });
+          // Only update if this user is still the current user
+          const currentUser = get().user;
+          if (currentUser?.uid === user.uid) {
+            set({ userDocument });
+          }
         });
 
         // Update last online
@@ -114,10 +118,19 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // Auth state listener will also fire and update state
       set({ user, isAuthenticated: true, isLoading: false });
 
-      // Log user login event (after a small delay to ensure userDocument is loaded)
-      setTimeout(() => {
-        ActivityLogService.logUserLogin().catch(console.error);
-      }, 1000);
+      // Log user login event — wait for userDocument to be available
+      const logLogin = () => {
+        const { userDocument } = get();
+        if (userDocument) {
+          ActivityLogService.logUserLogin().catch(console.error);
+        } else {
+          // Retry after a short delay if userDocument hasn't loaded yet
+          setTimeout(() => {
+            ActivityLogService.logUserLogin().catch(console.error);
+          }, 2000);
+        }
+      };
+      logLogin();
 
       return user;
     } catch (error) {
@@ -151,10 +164,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       await AuthService.signInWithGoogle();
       // Auth state listener will handle the rest
 
-      // Log user login event (after a small delay to ensure userDocument is loaded)
-      setTimeout(() => {
-        ActivityLogService.logUserLogin().catch(console.error);
-      }, 1000);
+      // Log user login event — wait for userDocument to be available
+      const logLogin = () => {
+        const { userDocument } = get();
+        if (userDocument) {
+          ActivityLogService.logUserLogin().catch(console.error);
+        } else {
+          setTimeout(() => {
+            ActivityLogService.logUserLogin().catch(console.error);
+          }, 2000);
+        }
+      };
+      logLogin();
     } catch (error) {
       const authError = error as AuthError;
       // Don't show error for cancelled sign-in
@@ -175,10 +196,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       await AuthService.signInWithApple();
       // Auth state listener will handle the rest
 
-      // Log user login event (after a small delay to ensure userDocument is loaded)
-      setTimeout(() => {
-        ActivityLogService.logUserLogin().catch(console.error);
-      }, 1000);
+      // Log user login event — wait for userDocument to be available
+      const logLogin = () => {
+        const { userDocument } = get();
+        if (userDocument) {
+          ActivityLogService.logUserLogin().catch(console.error);
+        } else {
+          setTimeout(() => {
+            ActivityLogService.logUserLogin().catch(console.error);
+          }, 2000);
+        }
+      };
+      logLogin();
     } catch (error) {
       const authError = error as AuthError;
       // Don't show error for cancelled sign-in
