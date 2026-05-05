@@ -2,7 +2,7 @@
   "expo": {
     "name": "Safewave for Business",
     "slug": "SafewaveExpo",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -32,6 +32,7 @@
     },
     "android": {
       "package": "com.safewave.forbusiness",
+      "versionCode": 4,
       "googleServicesFile": "./firebase/google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -43,8 +44,6 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
         "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE",
@@ -60,6 +59,7 @@
       "./plugins/withNotificationListener",
       "./plugins/withInstalledApps",
       "./plugins/withBLEForegroundService",
+      "./plugins/withSafewaveSigning",
       [
         "expo-build-properties",
         {

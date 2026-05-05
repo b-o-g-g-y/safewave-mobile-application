@@ -18,6 +18,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../../theme/colors';
 import { useAuthStore } from '../../store/authStore';
+import { useBluetoothStore } from '../../store/bluetoothStore';
 import { NotificationListenerService } from '../../services/NotificationListenerService';
 import { EditProfileModal } from '../../components/EditProfileModal';
 import { AccountStackParamList } from '../../navigation/AccountStackNavigator';
@@ -31,6 +32,9 @@ type AccountScreenNavigationProp = NativeStackNavigationProp<AccountStackParamLi
 export const AccountScreen: React.FC = () => {
   const navigation = useNavigation<AccountScreenNavigationProp>();
   const { user, userDocument, signOut, deleteAccount, isLoading } = useAuthStore();
+  const firmwareUpdateAvailable = useBluetoothStore(
+    (s) => s.firmwareUpdateAvailable
+  );
   const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [notificationSettingsVisible, setNotificationSettingsVisible] = useState(false);
   const [deleteAccountVisible, setDeleteAccountVisible] = useState(false);
@@ -199,6 +203,22 @@ export const AccountScreen: React.FC = () => {
 
             <TouchableOpacity
               style={[styles.menuItem, !isAndroid && { borderTopWidth: 0 }]}
+              onPress={() => navigation.navigate('FirmwareUpdate')}>
+              <View>
+                <Ionicons name="cloud-download-outline" size={22} color={colors.textPrimary} />
+                {firmwareUpdateAvailable && <View style={styles.rowBadgeDot} />}
+              </View>
+              <Text style={styles.menuItemText}>Firmware Update</Text>
+              {firmwareUpdateAvailable && (
+                <View style={styles.updatePill}>
+                  <Text style={styles.updatePillText}>Update</Text>
+                </View>
+              )}
+              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuItem}
               onPress={() => navigation.navigate('HelpSupport')}>
               <Ionicons name="help-circle-outline" size={22} color={colors.textPrimary} />
               <Text style={styles.menuItemText}>Help & Support</Text>
@@ -491,6 +511,30 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.textPrimary,
     marginLeft: spacing.md,
+  },
+  rowBadgeDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.warning,
+    borderWidth: 1.5,
+    borderColor: colors.surface,
+  },
+  updatePill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.round,
+    backgroundColor: colors.warning,
+    marginRight: spacing.sm,
+  },
+  updatePillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    letterSpacing: 0.3,
   },
   signOutButton: {
     flexDirection: 'row',

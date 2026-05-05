@@ -66,7 +66,9 @@ export const FIRMWARE_VERSION_CHAR_UUID = '47cd799a-8233-11ed-a1eb-0242ac120002'
 // ==================== OTA UPDATE SERVICE UUIDs ====================
 
 /**
- * OTA firmware update service
+ * OTA firmware update service.
+ * Per the vendor Android reference (`UUID_SERVICE_DATA_H`) the service
+ * base is `fe00`, not `ff01` (OTA.md §10 is incorrect about this).
  */
 export const OTA_SERVICE_UUID = '02f00000-0000-0000-0000-00000000fe00';
 

@@ -198,17 +198,15 @@ const requestAndroidPermissions = async (): Promise<boolean> => {
     const apiLevel = Platform.Version;
 
     if (apiLevel >= 31) {
-      // Android 12+
+      // Android 12+ — BLUETOOTH_SCAN uses neverForLocation, no location permission needed
       const results = await PermissionsAndroid.requestMultiple([
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       ]);
 
       return (
         results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === 'granted' &&
-        results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === 'granted' &&
-        results[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] === 'granted'
+        results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === 'granted'
       );
     } else {
       // Android 11 and below
@@ -700,6 +698,13 @@ export const BLEManager = {
   },
 
   /**
+   * Get the raw react-native-ble-plx Device handle for the current
+   * connection. Used by OTAManager for direct characteristic I/O on the
+   * OTA service. Returns null if not connected.
+   */
+  getRawConnectedDevice: (): Device | null => connectedDevice,
+
+  /**
    * Subscribe to battery status updates
    */
   subscribeToBattery: (callback: (status: BatteryStatus) => void): void => {
@@ -1114,8 +1119,8 @@ export const BLEManager = {
       if (characteristic?.value) {
         const bytes = base64ToBytes(characteristic.value);
         if (bytes.length >= 6) {
-          // Parse firmware version: data[2].data[3]data[4]data[5]
-          const version = `${bytes[2]}.${bytes[3]}${bytes[4]}${bytes[5]}`;
+          // Parse firmware version as dotted 4-part: data[2].data[3].data[4].data[5]
+          const version = `${bytes[2]}.${bytes[3]}.${bytes[4]}.${bytes[5]}`;
           console.log('[BLE] Firmware version read:', version);
           return version;
         } else if (bytes.length > 0) {

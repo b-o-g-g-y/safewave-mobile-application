@@ -10,6 +10,9 @@ import {
   OTA_SERVICE_UUID,
   HID_SERVICE_UUID,
 } from '../services/bluetooth/BLEConstants';
+import { performOTA, OTACancelled } from '../services/bluetooth/OTAManager';
+import { FirmwareRepository } from '../services/firmware/FirmwareRepository';
+import { isFirmwareNewer } from '../utils/firmwareVersion';
 import { NotificationService } from '../services/NotificationService';
 import { ActivityLogService } from '../services/ActivityLogService';
 import { ForegroundServiceManager } from '../services/ForegroundServiceManager';
@@ -100,7 +103,18 @@ const initialState: BluetoothState = {
   error: null,
   hasPermissions: false,
   bluetoothEnabled: false,
+  otaStatus: 'idle',
+  otaPhase: null,
+  otaProgress: 0,
+  otaError: null,
+  otaDeviceType: null,
+  firmwareUpdateAvailable: false,
+  latestFirmwareVersion: null,
+  latestFirmwareUrl: null,
 };
+
+// Mutable cancellation flag for the active OTA run.
+let otaCancelRequested = false;
 
 /**
  * Zustand store for Bluetooth state management
@@ -974,6 +988,10 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
       get().stopAutoReconnect();
       set({ isScanning: false, reconnectingDeviceName: null });
 
+      // Non-blocking: ask Firestore whether a newer firmware exists.
+      // The user sees a badge on the Account tab when true.
+      get().checkFirmwareUpdate().catch(() => {});
+
       // Log successful connection
       const bandName = device.name || 'Unknown Band';
       ActivityLogService.logBandConnected(bandName).catch(console.error);
@@ -1216,6 +1234,129 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
       set({ error: error.message || 'Failed to write app settings' });
       throw error;
     }
+  },
+
+  /**
+   * Start a firmware OTA update using the provided firmware bytes.
+   * Enforces the 50% battery precondition per OTA.md §2.
+   */
+  startOTA: async (firmwareBytes: Uint8Array) => {
+    const { connectionState, batteryLevel, otaStatus } = get();
+
+    if (otaStatus === 'running') {
+      throw new Error('OTA already in progress');
+    }
+    if (connectionState !== 'connected') {
+      throw new Error('Band must be connected before starting OTA');
+    }
+    if (batteryLevel === null) {
+      throw new Error('Band battery level unknown — cannot verify OTA safety');
+    }
+    if (batteryLevel < 40) {
+      throw new Error(
+        `Band battery is ${batteryLevel}% — OTA requires at least 40% to avoid mid-flash failure`
+      );
+    }
+    if (firmwareBytes.length === 0) {
+      throw new Error('Firmware file is empty');
+    }
+
+    const device = BLEManager.getRawConnectedDevice();
+    if (!device) {
+      throw new Error('No connected BLE device handle available');
+    }
+
+    otaCancelRequested = false;
+    set({
+      otaStatus: 'running',
+      otaPhase: 'preparing',
+      otaProgress: 0,
+      otaError: null,
+      otaDeviceType: null,
+    });
+
+    try {
+      await performOTA({
+        device,
+        firmwareBytes,
+        isCancelled: () => otaCancelRequested,
+        onProgress: (p) => {
+          const progress =
+            p.phase === 'writing-firmware' && p.totalBytes > 0
+              ? p.bytesWritten / p.totalBytes
+              : p.phase === 'done'
+                ? 1
+                : get().otaProgress;
+          set({
+            otaPhase: p.phase,
+            otaProgress: progress,
+            otaDeviceType: p.deviceType ?? get().otaDeviceType,
+          });
+        },
+      });
+      set({ otaStatus: 'success', otaPhase: 'done', otaProgress: 1 });
+    } catch (error: any) {
+      const cancelled = error instanceof OTACancelled;
+      set({
+        otaStatus: 'error',
+        otaError: cancelled
+          ? 'OTA cancelled'
+          : error?.message || 'OTA failed',
+      });
+      if (!cancelled) throw error;
+    } finally {
+      otaCancelRequested = false;
+    }
+  },
+
+  /**
+   * Request cancellation of an in-flight OTA. Best-effort: the loop checks
+   * this flag between firmware chunks, so cancellation is only honoured
+   * during the streaming phase. On BK8010H, cancelling mid-flash can
+   * brick the device — surface the warning in UI.
+   */
+  cancelOTA: () => {
+    otaCancelRequested = true;
+  },
+
+  /**
+   * Refresh the firmware-update-available flag by fetching the Firestore
+   * manifest and comparing it against the band's currently running
+   * firmware. Safe to call repeatedly — all failures are swallowed and
+   * simply leave the flag as-is.
+   */
+  checkFirmwareUpdate: async () => {
+    try {
+      const manifest = await FirmwareRepository.getManifest();
+      const { firmwareVersion } = get();
+      const available =
+        !!manifest &&
+        manifest.updateAvailable === true &&
+        isFirmwareNewer(firmwareVersion, manifest.version);
+
+      set({
+        firmwareUpdateAvailable: available,
+        latestFirmwareVersion: manifest?.version ?? null,
+        latestFirmwareUrl: manifest?.url ?? null,
+      });
+    } catch (err) {
+      console.log('[BLE Store] checkFirmwareUpdate failed:', err);
+    }
+  },
+
+  /**
+   * Reset OTA-specific state (status, progress, error). Does not affect
+   * the BLE connection.
+   */
+  resetOTA: () => {
+    otaCancelRequested = false;
+    set({
+      otaStatus: 'idle',
+      otaPhase: null,
+      otaProgress: 0,
+      otaError: null,
+      otaDeviceType: null,
+    });
   },
 
   /**

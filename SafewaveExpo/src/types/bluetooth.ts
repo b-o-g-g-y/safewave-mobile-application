@@ -86,7 +86,37 @@ export interface BluetoothState {
   // Permissions
   hasPermissions: boolean;
   bluetoothEnabled: boolean;
+
+  // OTA firmware update
+  otaStatus: OTAStatus;
+  otaPhase: OTAPhaseLabel | null;
+  otaProgress: number; // 0..1
+  otaError: string | null;
+  otaDeviceType: 'BK8010' | 'BK8010H' | null;
+
+  // Firmware update availability (drives UI badges)
+  firmwareUpdateAvailable: boolean;
+  latestFirmwareVersion: string | null;
+  latestFirmwareUrl: string | null;
 }
+
+/**
+ * Overall OTA lifecycle status exposed to UI.
+ */
+export type OTAStatus = 'idle' | 'running' | 'success' | 'error';
+
+/**
+ * Granular OTA phase labels (forwarded from OTAManager).
+ */
+export type OTAPhaseLabel =
+  | 'preparing'
+  | 'handshake'
+  | 'negotiating-mtu'
+  | 'erasing'
+  | 'writing-firmware'
+  | 'finalising'
+  | 'rebooting'
+  | 'done';
 
 /**
  * Bluetooth store actions
@@ -123,6 +153,12 @@ export interface BluetoothActions {
     bundleIdentifier: string;
     config: { strength: number; numberOfVibrations: number };
   }>) => Promise<void>;
+
+  // OTA
+  startOTA: (firmwareBytes: Uint8Array) => Promise<void>;
+  cancelOTA: () => void;
+  resetOTA: () => void;
+  checkFirmwareUpdate: () => Promise<void>;
 
   // State management
   setError: (error: string | null) => void;

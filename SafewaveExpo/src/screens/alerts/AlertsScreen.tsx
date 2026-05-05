@@ -29,7 +29,7 @@ type AppWithId = ApplicationDocument & { id: string };
 
 export const AlertsScreen: React.FC = () => {
   const { user, userDocument } = useAuthStore();
-  const { connectedDevice, connectionState, writeAppSettings } = useBluetoothStore();
+  const { connectedDevice, connectionState, writeAppSettings, vibrate } = useBluetoothStore();
 
   const [apps, setApps] = useState<AppWithId[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -62,10 +62,10 @@ export const AlertsScreen: React.FC = () => {
       const platformApps = fetchedApps.filter(
         app => app.appPlatform === Platform.OS
       );
-      
+
       console.log('[AlertsScreen] Total apps from Firebase:', fetchedApps.length);
       console.log('[AlertsScreen] Apps for', Platform.OS + ':', platformApps.length);
-      
+
       // FirestoreService adds 'id' field to each document
       setApps(platformApps as AppWithId[]);
       setIsLoading(false);
@@ -78,13 +78,13 @@ export const AlertsScreen: React.FC = () => {
   useEffect(() => {
     if (isAndroid) {
       checkNotificationAccess();
-      
+
       // Subscribe to real-time connection status changes
       const unsubscribe = NotificationListenerService.addConnectionStatusListener((connected) => {
         console.log('[AlertsScreen] Notification service connection status:', connected);
         setNotificationAccessGranted(connected);
       });
-      
+
       return () => unsubscribe();
     }
   }, [isAndroid]);
@@ -180,7 +180,7 @@ export const AlertsScreen: React.FC = () => {
       if (Platform.OS === 'ios' && isConnected) {
         // Wait a bit for Firebase to update and propagate the changes
         await new Promise(resolve => setTimeout(resolve, 500));
-        
+
         // Get the updated list of enabled apps
         const enabledApps = apps
           .map(app => {
@@ -212,7 +212,7 @@ export const AlertsScreen: React.FC = () => {
         if (enabledApps.length > 0) {
           console.log('[VibrationConfig] Pushing settings to band...');
           console.log('[VibrationConfig] Enabled apps count:', enabledApps.length);
-          
+
           const appsToWrite = enabledApps.map(app => {
             const settings = {
               bundleIdentifier: app.bundleIdentifier,
@@ -228,12 +228,24 @@ export const AlertsScreen: React.FC = () => {
           await writeAppSettings(appsToWrite);
           console.log('[VibrationConfig] Successfully pushed settings to band');
         }
-      } else {
-        if (Platform.OS === 'android') {
-          console.log('[VibrationConfig] Android: Skipping band sync, notifications handled by app');
+      } else if (Platform.OS === 'android') {
+        if (isConnected) {
+          try {
+            await vibrate({
+              strength: 30,
+              numBuzzes: 1,
+              dutyOfBuzz: 20,
+              durationOfDelay: 50,
+            });
+          } catch (vibrationError) {
+            console.log('[VibrationConfig] Android confirmation vibration failed:', vibrationError);
+            Alert.alert('Settings Saved', 'Your alert settings have been saved.');
+          }
         } else {
-          console.log('[VibrationConfig] Band not connected, skipping band update');
+          Alert.alert('Settings Saved', 'Your alert settings have been saved.');
         }
+      } else {
+        console.log('[VibrationConfig] Band not connected, skipping band update');
       }
     } catch (error) {
       console.error('Failed to save app config:', error);
@@ -350,7 +362,7 @@ export const AlertsScreen: React.FC = () => {
                       Enable notification access to receive alerts
                     </Text>
                   </View>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.refreshButton}
                     onPress={handleRefreshNotificationStatus}
                     activeOpacity={0.7}
@@ -358,7 +370,7 @@ export const AlertsScreen: React.FC = () => {
                     <Ionicons name="refresh" size={20} color={colors.accent} />
                   </TouchableOpacity>
                 </View>
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.notificationBannerButton}
                   onPress={handleEnableNotifications}
                   activeOpacity={0.7}
