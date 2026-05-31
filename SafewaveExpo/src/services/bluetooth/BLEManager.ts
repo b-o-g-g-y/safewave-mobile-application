@@ -1,6 +1,7 @@
 import { Platform, PermissionsAndroid, AppState } from 'react-native';
 import { BleManager, Device, State, BleError, ConnectionPriority } from 'react-native-ble-plx';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import {
   BLEDevice,
   VibrationCommand,
@@ -150,8 +151,10 @@ const retryBleOperation = async <T>(
 const getBleManager = (): BleManager => {
   if (!bleManagerInstance) {
     if (Platform.OS === 'ios') {
+      const bundleId =
+        Constants.expoConfig?.ios?.bundleIdentifier ?? 'com.safewave.unknown';
       bleManagerInstance = new BleManager({
-        restoreStateIdentifier: 'com.safewave.ble.restore',
+        restoreStateIdentifier: `${bundleId}.ble.restore`,
         restoreStateFunction: (restoredState) => {
           if (restoredState?.connectedPeripherals?.length) {
             console.log(
