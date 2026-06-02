@@ -8,6 +8,7 @@ import {
   TouchableWithoutFeedback,
   Alert,
   ActivityIndicator,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,9 +23,10 @@ interface StepperProps {
   max: number;
   step: number;
   onValueChange: (value: number) => void;
+  disabled?: boolean;
 }
 
-const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange }) => {
+const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange, disabled = false }) => {
   const decrement = () => {
     if (value - step >= min) {
       onValueChange(value - step);
@@ -37,14 +39,17 @@ const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange 
     }
   };
 
+  const decrementDisabled = disabled || value <= min;
+  const incrementDisabled = disabled || value >= max;
+
   return (
-    <View style={stepperStyles.container}>
+    <View style={[stepperStyles.container, disabled && stepperStyles.containerDisabled]}>
       <TouchableOpacity
-        style={[stepperStyles.button, value <= min && stepperStyles.buttonDisabled]}
+        style={[stepperStyles.button, decrementDisabled && stepperStyles.buttonDisabled]}
         onPress={decrement}
-        disabled={value <= min}
+        disabled={decrementDisabled}
       >
-        <Ionicons name="remove" size={24} color={value <= min ? colors.textMuted : colors.textPrimary} />
+        <Ionicons name="remove" size={24} color={decrementDisabled ? colors.textMuted : colors.textPrimary} />
       </TouchableOpacity>
 
       <View style={stepperStyles.track}>
@@ -57,11 +62,11 @@ const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange 
       </View>
 
       <TouchableOpacity
-        style={[stepperStyles.button, value >= max && stepperStyles.buttonDisabled]}
+        style={[stepperStyles.button, incrementDisabled && stepperStyles.buttonDisabled]}
         onPress={increment}
-        disabled={value >= max}
+        disabled={incrementDisabled}
       >
-        <Ionicons name="add" size={24} color={value >= max ? colors.textMuted : colors.textPrimary} />
+        <Ionicons name="add" size={24} color={incrementDisabled ? colors.textMuted : colors.textPrimary} />
       </TouchableOpacity>
     </View>
   );
@@ -72,6 +77,9 @@ const stepperStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginVertical: spacing.sm,
+  },
+  containerDisabled: {
+    opacity: 0.4,
   },
   button: {
     width: 44,
@@ -116,7 +124,10 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
   initialVibrations = 2,
   initialStrength = 50,
 }) => {
-  const [vibrations, setVibrations] = useState(initialVibrations);
+  // 0 means "repeat until dismissed" (continuous). The stepper itself always
+  // holds a usable 1-10 value so toggling continuous off restores a real count.
+  const [continuous, setContinuous] = useState(initialVibrations === 0);
+  const [vibrations, setVibrations] = useState(initialVibrations === 0 ? 2 : initialVibrations);
   const [strength, setStrength] = useState(initialStrength);
   const [isSaving, setIsSaving] = useState(false);
   const { vibrate, connectionState } = useBluetoothStore();
@@ -124,7 +135,8 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
   // Reset values when modal opens with new initial values
   useEffect(() => {
     if (visible) {
-      setVibrations(initialVibrations);
+      setContinuous(initialVibrations === 0);
+      setVibrations(initialVibrations === 0 ? 2 : initialVibrations);
       setStrength(initialStrength);
       setIsSaving(false);
     }
@@ -142,10 +154,12 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
     }
 
     try {
-      // Create vibration command with current settings
+      // Create vibration command with current settings.
+      // numBuzzes of 0 tells the band to vibrate continuously until the
+      // user presses its physical button.
       const vibrationCommand: VibrationCommand = {
         strength: strength,
-        numBuzzes: vibrations,
+        numBuzzes: continuous ? 0 : vibrations,
         dutyOfBuzz: 50, // Default duty cycle
         durationOfDelay: 50, // Default delay between buzzes
       };
@@ -163,7 +177,7 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onSave(vibrations, strength);
+      await onSave(continuous ? 0 : vibrations, strength);
     } catch (error) {
       console.error('Error saving configuration:', error);
     } finally {
@@ -226,14 +240,37 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
                       <Ionicons name="pulse" size={20} color={colors.accent} />
                       <Text style={styles.configLabel}>Number of Vibrations</Text>
                     </View>
-                    <Text style={styles.configValue}>{vibrations}x</Text>
+                    {continuous ? (
+                      <View style={styles.continuousValue}>
+                        <Ionicons name="infinite" size={18} color={colors.accent} />
+                        <Text style={[styles.configValue, styles.continuousValueText]}>
+                          Continuous
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.configValue}>{vibrations}x</Text>
+                    )}
                   </View>
+
+                  {/* Repeat until dismissed toggle */}
+                  <View style={styles.continuousRow}>
+                    <Text style={styles.continuousLabel}>Repeat until dismissed</Text>
+                    <Switch
+                      value={continuous}
+                      onValueChange={setContinuous}
+                      trackColor={{ false: colors.surfaceLight, true: colors.accent }}
+                      thumbColor={colors.textPrimary}
+                      ios_backgroundColor={colors.surfaceLight}
+                    />
+                  </View>
+
                   <Stepper
                     value={vibrations}
                     min={1}
                     max={10}
                     step={1}
                     onValueChange={setVibrations}
+                    disabled={continuous}
                   />
                   <View style={styles.sliderLabels}>
                     <Text style={styles.sliderLabel}>1</Text>
@@ -271,18 +308,33 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
                 <View style={styles.previewSection}>
                   <Text style={styles.previewLabel}>Preview</Text>
                   <View style={styles.previewVisual}>
-                    {Array.from({ length: vibrations }).map((_, i) => (
-                      <View
-                        key={i}
-                        style={[
-                          styles.previewDot,
-                          {
-                            opacity: 0.3 + (strength / 100) * 0.7,
-                            transform: [{ scale: 0.5 + (strength / 100) * 0.5 }],
-                          },
-                        ]}
-                      />
-                    ))}
+                    {continuous ? (
+                      <View style={styles.previewContinuous}>
+                        <View
+                          style={[
+                            styles.previewDot,
+                            {
+                              opacity: 0.3 + (strength / 100) * 0.7,
+                              transform: [{ scale: 0.5 + (strength / 100) * 0.5 }],
+                            },
+                          ]}
+                        />
+                        <Ionicons name="infinite" size={24} color={colors.accent} />
+                      </View>
+                    ) : (
+                      Array.from({ length: vibrations }).map((_, i) => (
+                        <View
+                          key={i}
+                          style={[
+                            styles.previewDot,
+                            {
+                              opacity: 0.3 + (strength / 100) * 0.7,
+                              transform: [{ scale: 0.5 + (strength / 100) * 0.5 }],
+                            },
+                          ]}
+                        />
+                      ))
+                    )}
                   </View>
                 </View>
 
@@ -298,7 +350,9 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
 
                 {/* Info */}
                 <Text style={styles.infoText}>
-                  Your band will vibrate with these settings when you receive a notification from this app.
+                  {continuous
+                    ? 'Your band will keep vibrating until you press the button on the band when you receive a notification from this app.'
+                    : 'Your band will vibrate with these settings when you receive a notification from this app.'}
                 </Text>
               </SafeAreaView>
             </View>
@@ -393,6 +447,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.accent,
   },
+  continuousValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  continuousValueText: {
+    marginLeft: spacing.xs,
+  },
+  continuousRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  continuousLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
   sliderLabels: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -416,6 +487,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: 40,
+  },
+  previewContinuous: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   previewDot: {
     width: 20,

@@ -34,7 +34,7 @@ export interface BatteryStatus {
  */
 export interface VibrationCommand {
   strength: number; // 0-100 (vibration intensity percentage)
-  numBuzzes: number; // 1-10 (number of vibration pulses)
+  numBuzzes: number; // 0 = continuous (repeat until button press), 1-10 = number of vibration pulses
   dutyOfBuzz: number; // 10-100 (duty cycle, default: 50)
   durationOfDelay: number; // 10-100 (delay between buzzes in ms, default: 50)
 }
