@@ -72,7 +72,7 @@ export interface ApplicationDocument {
  * Vibration configuration for app notifications
  */
 export interface VibrationConfig {
-  numberOfVibrations: number; // 1-10
+  numberOfVibrations: number; // 0 = continuous (repeat until button press), 1-10 = fixed count
   strength: number; // 1-100
   secondaryNumberOfVibrations?: number;
   secondaryStrength?: number;

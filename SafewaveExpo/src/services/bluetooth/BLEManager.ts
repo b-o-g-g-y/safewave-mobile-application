@@ -1058,10 +1058,12 @@ export const BLEManager = {
     }
 
     try {
-      // Convert command to byte array
+      // Convert command to byte array.
+      // numBuzzes of 0 is intentional: the band treats it as "vibrate
+      // continuously until the physical button is pressed", so allow 0 through.
       const data = [
         Math.min(100, Math.max(0, command.strength)),
-        Math.min(10, Math.max(1, command.numBuzzes)),
+        Math.min(10, Math.max(0, command.numBuzzes)),
         Math.min(100, Math.max(10, command.dutyOfBuzz)),
         Math.min(100, Math.max(10, command.durationOfDelay)),
       ];

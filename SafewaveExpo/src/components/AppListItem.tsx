@@ -89,13 +89,13 @@ export const AppListItem: React.FC<AppListItemProps> = ({
           </Text>
           <View style={styles.configRow}>
             <View style={styles.configBadge}>
-              <Ionicons 
-                name="pulse" 
-                size={12} 
-                color={enabled ? colors.accent : colors.textMuted} 
+              <Ionicons
+                name={vibrations === 0 ? 'infinite' : 'pulse'}
+                size={12}
+                color={enabled ? colors.accent : colors.textMuted}
               />
               <Text style={[styles.configText, !enabled && styles.textDisabled]}>
-                {vibrations}x
+                {vibrations === 0 ? 'Continuous' : `${vibrations}x`}
               </Text>
             </View>
             <View style={styles.configBadge}>
