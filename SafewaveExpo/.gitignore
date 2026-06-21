@@ -20,6 +20,16 @@ expo-env.d.ts
 *.keystore
 android/gradle.properties
 
+# Secrets / credentials (NEVER commit)
+serviceAccountKey.json
+credentials.json
+*.serviceaccount.json
+
+# Build artifacts
+*.apk
+*.aab
+*.ipa
+
 # Metro
 .metro-health-check*
 
