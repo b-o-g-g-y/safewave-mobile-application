@@ -33,6 +33,7 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
 
 # typescript
@@ -41,3 +42,25 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# AI / editor tooling
+.claude/
+.cursor/
+.cursorrules
+.windsurf/
+.aider*
+.vscode/
+.idea/
+
+# logs
+*.log
+logs/
+
+# OS / misc
+Thumbs.db
+*.swp
+*.swo
+*~
+.cache/
+tmp/
+coverage/

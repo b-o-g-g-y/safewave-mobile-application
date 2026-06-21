@@ -8,10 +8,22 @@ When you're making changes to `.ts`, `.tsx`, `.js` files (UI, logic, styling):
 
 ```bash
 cd SafewaveExpo
-npx expo start --tunnel
+
+# Business variant (default if APP_VARIANT is unset)
+npm run start:business
+# equivalent to: APP_VARIANT=business npx expo start
+
+# Consumer variant
+npm run start:consumer
+# equivalent to: APP_VARIANT=consumer npx expo start
+
+# Tunnel mode if you need it (works with either variant):
+APP_VARIANT=consumer npx expo start --tunnel
 ```
 
 Then scan the QR code with your phone. Changes will hot-reload automatically.
+
+The variant is selected at start time via the `APP_VARIANT` environment variable. The two variants use different bundle IDs and Firebase configs, so the installed dev client you scan into must match the variant you're running. If you have both variants' dev clients installed on the same device, scan with the matching one.
 
 ---
 
@@ -20,7 +32,8 @@ Then scan the QR code with your phone. Changes will hot-reload automatically.
 You need to rebuild when you:
 - Add/remove/update packages that have **native code** (check if package has `ios/` or `android/` folders)
 - Modify files in `ios/` or `android/` directories
-- Change `app.json` native settings (like permissions, bundle ID)
+- Change `app.config.js` native settings (like permissions, bundle ID, variant config, Firebase config paths, icons)
+- Switch between business and consumer variants (the generated `ios/` and `android/` projects are variant-specific)
 
 **Common packages that require rebuild:**
 - `react-native-svg`
@@ -37,12 +50,19 @@ You need to rebuild when you:
 ```bash
 cd SafewaveExpo
 
-# Clean old build artifacts (recommended after adding new native packages)
+# Clean old build artifacts (recommended after adding new native packages or switching variants)
 rm -rf ios/build ios/Pods
 
-# Rebuild iOS (this handles pod install automatically)
-npx expo run:ios --device
+# Rebuild iOS for the variant you're working on:
+
+# Business
+APP_VARIANT=business npx expo run:ios --device
+
+# Consumer
+APP_VARIANT=consumer npx expo run:ios --device
 ```
+
+Without `APP_VARIANT` set, the build defaults to business.
 
 Wait for Xcode to compile (~5-10 minutes first time, faster on subsequent builds).
 
@@ -51,11 +71,22 @@ Wait for Xcode to compile (~5-10 minutes first time, faster on subsequent builds
 ```bash
 cd SafewaveExpo
 
-# Build new development client
+# Business variant dev client
 eas build --profile development --platform ios
+
+# Consumer variant dev client
+eas build --profile development-consumer --platform ios
 ```
 
+Each variant has its own `development`, `preview`, and `production` profiles in `eas.json`. The `-consumer` profiles set `APP_VARIANT=consumer` automatically.
+
 After build completes (~15-20 min), install the new app on your device via the link provided.
+
+---
+
+### Production Releases
+
+This file covers development workflows. For shipping to the App Store or Play Store (either variant), see [DEPLOYMENT.md](DEPLOYMENT.md). It covers per-variant build commands, signing requirements, version-bump rules and floors per store, and a pre-flight checklist for each release.
 
 ---
 
@@ -91,6 +122,16 @@ Clear cache and restart:
 npx expo start --tunnel --clear
 ```
 
+#### Variant mismatch (wrong app icon, wrong bundle ID, Firebase init errors)
+
+You probably scanned with the wrong variant's dev client, or rebuilt without `--clean` after switching variants. Fix:
+```bash
+cd SafewaveExpo
+APP_VARIANT=<business|consumer> npx expo prebuild --clean
+APP_VARIANT=<business|consumer> npx expo run:ios --device
+```
+And scan with the dev client whose bundle ID matches the variant you're running.
+
 ---
 
 ### Current Native Dependencies
@@ -124,7 +165,7 @@ The app continues to send heartbeats to Firebase every 60 seconds while in the b
 
 The app maintains Bluetooth connection to the Safewave Band while in the background:
 
-- **iOS**: Configured with `bluetooth-central` background mode in `app.json`
+- **iOS**: Configured with `bluetooth-central` background mode in `app.config.js`
 - **Android**: Requires `ACCESS_BACKGROUND_LOCATION` permission for background BLE operations
 - **Battery Impact**: Maintaining Bluetooth and Firebase writes in background will consume additional battery
 - **Band Heartbeats**: The app sends band status updates to Firestore every 60 seconds while connected
@@ -132,8 +173,8 @@ The app maintains Bluetooth connection to the Safewave Band while in the backgro
 ### Permissions Required
 
 #### iOS
-- Bluetooth permissions (already configured)
-- Background Bluetooth mode (already configured in `app.json`)
+- Bluetooth permissions (already configured in `app.config.js`)
+- Background Bluetooth mode (already configured in `app.config.js`; consumer variant also has `fetch` and `remote-notification` background modes for parity with the previously-shipped Flutter app)
 
 #### Android
 - Standard Bluetooth permissions (already configured)

@@ -1,0 +1,23 @@
+# AI / editor tooling
+.claude/
+.cursor/
+.cursorrules
+.windsurf/
+.aider*
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# logs
+*.log
+logs/
+
+# OS / misc
+Thumbs.db
+*.swp
+*.swo
+*~
+.cache/
+tmp/
