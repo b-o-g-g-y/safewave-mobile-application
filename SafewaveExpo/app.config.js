@@ -17,11 +17,11 @@ const variants = {
   },
   consumer: {
     name: 'Safewave',
-    version: '1.2.0',
+    version: '1.3.0',
     iosBuildNumber: '1',
-    androidVersionCode: 8,
+    androidVersionCode: 16,
     iosBundleId: 'com.safewaveMobileApp',
-    androidPackage: 'com.safewave_mobile_app',
+    androidPackage: 'com.safewaveMobileApp',
     googleServicesIos: './firebase/GoogleService-Info.consumer.plist',
     googleServicesAndroid: './firebase/google-services.consumer.json',
     bgTaskIdentifier: 'com.safewaveMobileApp.refresh',
@@ -96,6 +96,14 @@ module.exports = {
         'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE',
         'android.permission.BIND_NOTIFICATION_LISTENER_SERVICE',
         'android.permission.QUERY_ALL_PACKAGES',
+        // Background reliability: the FGS notification keeps the process
+        // privileged (POST_NOTIFICATIONS), the battery-optimization exemption
+        // stops OEMs from killing it, and the boot receiver restarts it after
+        // a reboot. See plugins/withBLEForegroundService.js (BootReceiver) and
+        // src/services/PermissionsService.ts (runtime grants).
+        'android.permission.POST_NOTIFICATIONS',
+        'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+        'android.permission.RECEIVE_BOOT_COMPLETED',
       ],
     },
     web: {

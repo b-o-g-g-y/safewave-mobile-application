@@ -82,7 +82,9 @@ function createNotificationListenerJava(config, projectRoot) {
 
       const notificationListenerContent = `package ${packageName};
 
+import android.app.Notification;
 import android.content.Intent;
+import android.os.Bundle;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
@@ -105,7 +107,7 @@ public class NotificationListener extends NotificationListenerService {
     public void onNotificationPosted(StatusBarNotification sbn) {
         try {
             String packageName = sbn.getPackageName();
-            
+
             // Don't process our own app's notifications
             if (packageName.equals(getPackageName())) {
                 return;
@@ -113,8 +115,20 @@ public class NotificationListener extends NotificationListenerService {
 
             Log.d(TAG, "Notification received from: " + packageName);
 
+            // Extract title/text so the JS layer can filter by notification content.
+            String title = "";
+            String text = "";
+            String bigText = "";
+            Notification notification = sbn.getNotification();
+            if (notification != null && notification.extras != null) {
+                Bundle extras = notification.extras;
+                title = csToString(extras.getCharSequence(Notification.EXTRA_TITLE));
+                text = csToString(extras.getCharSequence(Notification.EXTRA_TEXT));
+                bigText = csToString(extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
+            }
+
             // Send event to React Native
-            sendEventToReactNative(packageName);
+            sendEventToReactNative(packageName, title, text, bigText);
         } catch (Exception e) {
             Log.e(TAG, "Error processing notification", e);
         }
@@ -125,7 +139,11 @@ public class NotificationListener extends NotificationListenerService {
         // We don't need to handle removed notifications
     }
 
-    private void sendEventToReactNative(String packageName) {
+    private String csToString(CharSequence cs) {
+        return cs == null ? "" : cs.toString();
+    }
+
+    private void sendEventToReactNative(String packageName, String title, String text, String bigText) {
         try {
             ReactApplication reactApplication = (ReactApplication) getApplication();
             ReactInstanceManager reactInstanceManager = reactApplication.getReactNativeHost().getReactInstanceManager();
@@ -134,12 +152,15 @@ public class NotificationListener extends NotificationListenerService {
             if (reactContext != null) {
                 WritableMap params = Arguments.createMap();
                 params.putString("packageName", packageName);
+                params.putString("title", title);
+                params.putString("text", text);
+                params.putString("bigText", bigText);
                 params.putDouble("timestamp", System.currentTimeMillis());
 
                 reactContext
                     .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
                     .emit(EVENT_NAME, params);
-                
+
                 Log.d(TAG, "Event sent to React Native: " + packageName);
             } else {
                 Log.w(TAG, "React context not available, cannot send event");

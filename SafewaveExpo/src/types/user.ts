@@ -76,7 +76,8 @@ export interface VibrationConfig {
   strength: number; // 1-100
   secondaryNumberOfVibrations?: number;
   secondaryStrength?: number;
-  phrases?: string[]; // Keywords for priority notifications
+  phrases?: string[]; // Keyword/phrase filter matched against a notification's title/text (Android only)
+  phraseMode?: 'allow' | 'block'; // 'allow' = only vibrate when a phrase matches; 'block' = vibrate for all except matches. Defaults to 'allow'. Ignored when phrases is empty.
 }
 
 /**
@@ -87,7 +88,10 @@ export interface HistoryDocument {
   appName: string;
   bundleIdentifier: string;
   userId: string;
-  message: string;
+  message: string; // short summary (notification title, or a fallback). Kept for back-compat.
+  title?: string; // notification title (Android), when available
+  body?: string; // notification body text (Android), when available
+  filtered?: boolean; // true = notification was recorded but suppressed by phrase filter rules (band did not vibrate)
   date: FirebaseFirestoreTypes.Timestamp;
 }
 

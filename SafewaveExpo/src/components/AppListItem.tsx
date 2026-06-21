@@ -17,6 +17,7 @@ interface AppListItemProps {
   enabled: boolean;
   vibrations: number;
   strength: number;
+  filterCount?: number;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -38,6 +39,7 @@ export const AppListItem: React.FC<AppListItemProps> = ({
   enabled,
   vibrations,
   strength,
+  filterCount = 0,
   onToggle,
   onEdit,
   onDelete,
@@ -99,15 +101,27 @@ export const AppListItem: React.FC<AppListItemProps> = ({
               </Text>
             </View>
             <View style={styles.configBadge}>
-              <Ionicons 
-                name="flash" 
-                size={12} 
-                color={enabled ? colors.accent : colors.textMuted} 
+              <Ionicons
+                name="flash"
+                size={12}
+                color={enabled ? colors.accent : colors.textMuted}
               />
               <Text style={[styles.configText, !enabled && styles.textDisabled]}>
                 {strength}%
               </Text>
             </View>
+            {filterCount > 0 && (
+              <View style={styles.configBadge}>
+                <Ionicons
+                  name="funnel"
+                  size={12}
+                  color={enabled ? colors.accent : colors.textMuted}
+                />
+                <Text style={[styles.configText, !enabled && styles.textDisabled]}>
+                  {filterCount}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       </View>

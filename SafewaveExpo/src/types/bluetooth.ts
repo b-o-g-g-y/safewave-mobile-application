@@ -136,10 +136,12 @@ export interface BluetoothActions {
   clearDiscoveredDevices: () => void;
 
   // Connection
-  connect: (deviceId: string) => Promise<void>;
+  // background:true uses OS-level autoConnect (Doze-resilient) for reconnects.
+  connect: (deviceId: string, opts?: { background?: boolean }) => Promise<void>;
   disconnect: () => Promise<void>;
   startBandHeartbeat: () => void;
   stopBandHeartbeat: () => void;
+  onBackgroundTick: () => Promise<void>;
   handleAppClosed: () => Promise<void>;
   startAutoReconnect: (deviceId?: string, deviceName?: string) => void;
   stopAutoReconnect: () => void;
@@ -170,6 +172,29 @@ export interface BluetoothActions {
  * Complete Bluetooth store type
  */
 export type BluetoothStore = BluetoothState & BluetoothActions;
+
+/**
+ * Android emulates "continuous" vibration with a large finite pulse count,
+ * since its firmware (unlike iOS) does not treat numBuzzes=0 as continuous.
+ * Kept within the single-byte range written by BLEManager.vibrate.
+ */
+export const ANDROID_CONTINUOUS_NUM_BUZZES = 100;
+
+/**
+ * Resolve the numBuzzes value actually sent to the band for the current
+ * platform. numBuzzes=0 means "continuous until the button is pressed":
+ * iOS firmware understands 0 directly, while Android needs a large finite
+ * count. All non-zero counts pass through unchanged.
+ */
+export const resolveLiveNumBuzzes = (
+  numBuzzes: number,
+  platform: 'android' | 'ios'
+): number => {
+  if (numBuzzes === 0 && platform === 'android') {
+    return ANDROID_CONTINUOUS_NUM_BUZZES;
+  }
+  return numBuzzes;
+};
 
 /**
  * Default vibration command for testing/confirmation

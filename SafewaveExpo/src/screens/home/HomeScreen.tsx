@@ -11,6 +11,8 @@ import {
   Animated,
   Easing,
   Platform,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -26,6 +28,7 @@ import { useAuthStore } from '../../store/authStore';
 import { useBluetoothStore } from '../../store/bluetoothStore';
 import { FirestoreService } from '../../services/firebase/FirestoreService';
 import { NotificationListenerService } from '../../services/NotificationListenerService';
+import { PermissionsService } from '../../services/PermissionsService';
 import { promptNotificationAccess } from '../../utils/permissions';
 import { BLEDevice } from '../../types/bluetooth';
 import { ApplicationDocument } from '../../types/user';
@@ -123,26 +126,57 @@ export const HomeScreen: React.FC = () => {
     return () => unsubscribe();
   }, [user?.uid]);
 
-  // Check notification access on Android
+  // Check notification access on Android.
+  //
+  // The banner must reflect the *actual* OS-level grant, not the
+  // NotificationListenerService's in-memory `isServiceConnected` heuristic. That
+  // flag only flips to true once the first notification from a monitored app
+  // arrives, so on a fresh launch (or when no monitored app has fired yet) it
+  // can read false even though the permission is granted — which left the banner
+  // stuck on the home screen. We therefore query the native enabled-listeners
+  // state directly on launch and whenever the app returns to the foreground.
   useEffect(() => {
-    if (isAndroid) {
-      checkNotificationAccess();
-      
-      // Subscribe to real-time connection status changes
-      const unsubscribe = NotificationListenerService.addConnectionStatusListener((connected) => {
-        console.log('[HomeScreen] Notification service connection status:', connected);
-        setNotificationAccessGranted(connected);
-      });
-      
-      return () => unsubscribe();
+    if (!isAndroid) {
+      return;
     }
+
+    checkNotificationAccess();
+
+    // Re-check when returning from the system notification-access settings screen
+    // (the most common way this gets granted), so the banner clears immediately.
+    const appStateSub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      if (next === 'active') {
+        checkNotificationAccess();
+      }
+    });
+
+    // The service's runtime signal is still useful as a fast-path: if a
+    // notification flows through, we know access is granted. But never let a
+    // stale `false` from it override a confirmed-granted OS state.
+    const unsubscribe = NotificationListenerService.addConnectionStatusListener((connected) => {
+      console.log('[HomeScreen] Notification service connection status:', connected);
+      if (connected) {
+        setNotificationAccessGranted(true);
+      } else {
+        // Confirm against the OS before showing the banner, to avoid flapping on
+        // the optimistic default.
+        checkNotificationAccess();
+      }
+    });
+
+    return () => {
+      appStateSub.remove();
+      unsubscribe();
+    };
   }, [isAndroid]);
 
   const checkNotificationAccess = async () => {
-    if (isAndroid) {
-      const granted = NotificationListenerService.checkPermission();
-      setNotificationAccessGranted(granted);
+    if (!isAndroid) {
+      return;
     }
+    // Authoritative native check (NotificationManagerCompat enabled-listeners).
+    const granted = await PermissionsService.isNotificationListenerEnabled();
+    setNotificationAccessGranted(granted);
   };
 
   const handleEnableNotifications = () => {

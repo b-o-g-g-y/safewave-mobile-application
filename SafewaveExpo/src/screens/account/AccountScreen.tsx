@@ -19,7 +19,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../../theme/colors';
 import { useAuthStore } from '../../store/authStore';
 import { useBluetoothStore } from '../../store/bluetoothStore';
-import { NotificationListenerService } from '../../services/NotificationListenerService';
 import { EditProfileModal } from '../../components/EditProfileModal';
 import { AccountStackParamList } from '../../navigation/AccountStackNavigator';
 
@@ -36,7 +35,6 @@ export const AccountScreen: React.FC = () => {
     (s) => s.firmwareUpdateAvailable
   );
   const [editProfileVisible, setEditProfileVisible] = useState(false);
-  const [notificationSettingsVisible, setNotificationSettingsVisible] = useState(false);
   const [deleteAccountVisible, setDeleteAccountVisible] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
 
@@ -77,15 +75,6 @@ export const AccountScreen: React.FC = () => {
     } catch (error) {
       Alert.alert('Error', 'Failed to open link');
     }
-  };
-
-  const handleNotificationSettings = () => {
-    setNotificationSettingsVisible(true);
-  };
-
-  const handleOpenNotificationSettings = () => {
-    NotificationListenerService.openSettings();
-    setNotificationSettingsVisible(false);
   };
 
   const handleOpenDeleteAccount = () => {
@@ -190,13 +179,13 @@ export const AccountScreen: React.FC = () => {
 
           {/* Menu Section */}
           <View style={styles.menuSection}>
-            {/* Android Notification Access - Only show on Android */}
+            {/* Android background access checklist - Only show on Android */}
             {isAndroid && (
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={handleNotificationSettings}>
-                <Ionicons name="notifications-outline" size={22} color={colors.textPrimary} />
-                <Text style={styles.menuItemText}>Notification Access</Text>
+                onPress={() => navigation.navigate('BackgroundAccess')}>
+                <Ionicons name="shield-checkmark-outline" size={22} color={colors.textPrimary} />
+                <Text style={styles.menuItemText}>Background Access</Text>
                 <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
               </TouchableOpacity>
             )}
@@ -277,46 +266,6 @@ export const AccountScreen: React.FC = () => {
         visible={editProfileVisible}
         onClose={() => setEditProfileVisible(false)}
       />
-
-      {/* Notification Settings Modal - Android Only */}
-      {isAndroid && (
-        <Modal
-          visible={notificationSettingsVisible}
-          animationType="fade"
-          transparent
-          onRequestClose={() => setNotificationSettingsVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Notification Access</Text>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={() => setNotificationSettingsVisible(false)}>
-                  <Ionicons name="close" size={24} color={colors.textSecondary} />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.modalBody}>
-                <View style={styles.iconContainer}>
-                  <Ionicons name="notifications-outline" size={64} color={colors.accent} />
-                </View>
-                <Text style={styles.modalDescription}>
-                  To receive alerts on your Safewave Band, you need to enable notification access for this app in your Android settings.
-                </Text>
-              </View>
-
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={styles.openSettingsButton}
-                  onPress={handleOpenNotificationSettings}>
-                  <Text style={styles.openSettingsButtonText}>Open Settings</Text>
-                  <Ionicons name="arrow-forward" size={20} color={colors.textPrimary} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-      )}
 
       <Modal
         visible={deleteAccountVisible}

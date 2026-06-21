@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity, Alert, AppState, AppStateStatus, Platform } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity, Alert, AppState, AppStateStatus, Platform, DeviceEventEmitter } from 'react-native';
 import { AuthNavigator } from './src/navigation/AuthNavigator';
 import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import { useAuthStore } from './src/store/authStore';
@@ -12,7 +12,14 @@ import { NotificationListenerService } from './src/services/NotificationListener
 import { ActivityLogService } from './src/services/ActivityLogService';
 import { AppPresenceService } from './src/services/AppPresenceService';
 import { BLEManager } from './src/services/bluetooth/BLEManager';
+import { PermissionsService } from './src/services/PermissionsService';
+import { PermissionsChecklistScreen } from './src/screens/permissions/PermissionsChecklistScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, spacing } from './src/theme/colors';
+
+// One-time onboarding gate: after login on Android, show the background-access
+// checklist if any required grant is missing and the user hasn't dismissed it.
+const PERMISSIONS_ONBOARDED_KEY = '@safewave/permissions_onboarded';
 
 // Global error boundary to prevent white screen crashes in production
 class ErrorBoundary extends React.Component<
@@ -149,6 +156,8 @@ const EmailVerificationScreen = () => {
 const AppContent = () => {
   const { isAuthenticated, isLoading, user, initialize } = useAuthStore();
   const appState = useRef(AppState.currentState);
+  // null = still deciding, true = show the one-time permissions gate
+  const [showPermissionsGate, setShowPermissionsGate] = useState<boolean | null>(null);
 
   // Initialize auth state listener on mount
   useEffect(() => {
@@ -173,7 +182,8 @@ const AppContent = () => {
   useEffect(() => {
     if (Platform.OS === 'android' && isAuthenticated && user?.uid) {
       NotificationListenerService.initialize(user.uid);
-      // The banners on Home and Alerts screens will guide users to enable permission
+      // The post-login Background Access checklist (and Account → Background Access)
+      // guide users to grant notification listener + battery/auto-start permissions.
     } else if (Platform.OS === 'android') {
       NotificationListenerService.cleanup();
     }
@@ -183,6 +193,22 @@ const AppContent = () => {
         NotificationListenerService.cleanup();
       }
     };
+  }, [isAuthenticated, user?.uid]);
+
+  // Listen for the native Doze-piercing wake-tick (Android only). The alarm
+  // fires even when JS timers are frozen; we run a reconnect/health-check tick.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !isAuthenticated || !user?.uid) {
+      return;
+    }
+
+    const subscription = DeviceEventEmitter.addListener('bleBackgroundTick', () => {
+      useBluetoothStore.getState().onBackgroundTick().catch((err) => {
+        console.error('[App] onBackgroundTick failed:', err);
+      });
+    });
+
+    return () => subscription.remove();
   }, [isAuthenticated, user?.uid]);
 
   // Initialize/cleanup AppPresenceService for real-time app status tracking
@@ -248,6 +274,48 @@ const AppContent = () => {
     };
   }, [isAuthenticated]);
 
+  // Decide whether to show the one-time permissions gate after login (Android only).
+  useEffect(() => {
+    let cancelled = false;
+
+    if (Platform.OS !== 'android' || !isAuthenticated || !user?.uid) {
+      setShowPermissionsGate(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        const onboarded = await AsyncStorage.getItem(PERMISSIONS_ONBOARDED_KEY);
+        if (onboarded === 'true') {
+          if (!cancelled) setShowPermissionsGate(false);
+          return;
+        }
+        const status = await PermissionsService.getStatus();
+        const allGranted =
+          status.notifications &&
+          status.batteryOptimization &&
+          status.notificationListener;
+        if (!cancelled) setShowPermissionsGate(!allGranted);
+      } catch (error) {
+        console.error('[App] Failed to resolve permissions gate:', error);
+        if (!cancelled) setShowPermissionsGate(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, user?.uid]);
+
+  const dismissPermissionsGate = async () => {
+    try {
+      await AsyncStorage.setItem(PERMISSIONS_ONBOARDED_KEY, 'true');
+    } catch (error) {
+      console.error('[App] Failed to persist permissions onboarding flag:', error);
+    }
+    setShowPermissionsGate(false);
+  };
+
   // Show loading screen while checking auth state
   if (isLoading) {
     return <LoadingScreen />;
@@ -272,6 +340,15 @@ const AppContent = () => {
   // Show auth screens if not authenticated
   if (!isAuthenticated) {
     return <AuthNavigator />;
+  }
+
+  // Wait until we've decided whether the permissions gate is needed, then show
+  // it once for authenticated Android users who are missing a required grant.
+  if (showPermissionsGate === null) {
+    return <LoadingScreen />;
+  }
+  if (showPermissionsGate) {
+    return <PermissionsChecklistScreen onComplete={dismissPermissionsGate} />;
   }
 
   // Show main tab navigator for authenticated users

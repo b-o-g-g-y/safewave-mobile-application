@@ -13,6 +13,8 @@ interface BLEForegroundServiceModule {
   startService(bandName: string): void;
   updateService(bandName: string, status: string): void;
   stopService(): void;
+  startBackgroundTicks(): void;
+  stopBackgroundTicks(): void;
 }
 
 const NativeForegroundService: BLEForegroundServiceModule | undefined =
@@ -62,6 +64,36 @@ export const ForegroundServiceManager = {
       console.log('[ForegroundService] Stopped');
     } catch (error) {
       console.error('[ForegroundService] Failed to stop:', error);
+    }
+  },
+
+  /**
+   * Start the periodic AlarmManager wake-tick that survives Doze (JS timers
+   * freeze in Doze; this fires a native alarm to wake JS for a reconnect/health
+   * check). Called when a BLE connection is established.
+   */
+  startBackgroundTicks(): void {
+    if (!NativeForegroundService) return;
+
+    try {
+      NativeForegroundService.startBackgroundTicks();
+      console.log('[ForegroundService] Background ticks started');
+    } catch (error) {
+      console.error('[ForegroundService] Failed to start background ticks:', error);
+    }
+  },
+
+  /**
+   * Stop the wake-tick. Called on manual disconnect, logout, or app reset.
+   */
+  stopBackgroundTicks(): void {
+    if (!NativeForegroundService) return;
+
+    try {
+      NativeForegroundService.stopBackgroundTicks();
+      console.log('[ForegroundService] Background ticks stopped');
+    } catch (error) {
+      console.error('[ForegroundService] Failed to stop background ticks:', error);
     }
   },
 };
