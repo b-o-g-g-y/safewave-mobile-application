@@ -4,9 +4,19 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
+    "start:business": "APP_VARIANT=business expo start",
+    "start:consumer": "APP_VARIANT=consumer expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "prebuild:business": "APP_VARIANT=business expo prebuild --clean",
+    "prebuild:consumer": "APP_VARIANT=consumer expo prebuild --clean",
+    "build:business:ios": "eas build --profile production --platform ios",
+    "build:business:android": "eas build --profile production --platform android",
+    "build:consumer:ios": "eas build --profile production-consumer --platform ios",
+    "build:consumer:android": "eas build --profile production-consumer --platform android",
+    "submit:business": "eas submit --profile production",
+    "submit:consumer": "eas submit --profile production-consumer",
     "postinstall": "npx patch-package"
   },
   "dependencies": {

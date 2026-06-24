@@ -9,6 +9,7 @@
  * for that notification before sending the next command.
  */
 
+import { Platform } from 'react-native';
 import { Device, Subscription, ConnectionPriority } from 'react-native-ble-plx';
 import { OTA_SERVICE_UUID, OTA_CHAR_1_UUID, OTA_CHAR_2_UUID } from './BLEConstants';
 import {
@@ -63,7 +64,15 @@ export class OTACancelled extends Error {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-const NOTIFY_TIMEOUT_MS = 5000;
+const NOTIFY_TIMEOUT_MS = 8000;
+
+// Inter-chunk pacing for the firmware-write loop. iOS Core Bluetooth accepts
+// WriteWithoutResponse into a local TX buffer with no connection-interval
+// back-pressure, so writes outrun the band's flash RX-drain rate and saturate
+// its buffer (~40% → dropped notify → timeout). 50 ms matches the proven Flutter
+// impl + OTA_PROTOCOL.md §7.2/11/12 and is load-bearing. Android's GATT queue
+// self-paces, so no delay is needed there.
+const FW_CHUNK_DELAY_MS = Platform.OS === 'ios' ? 50 : 0;
 
 /**
  * Tiny notification queue: every incoming notify pushes its bytes in, and
@@ -283,6 +292,7 @@ export const performOTA = async ({
         chunkSize
       );
       await queue.next();
+      if (FW_CHUNK_DELAY_MS > 0) await sleep(FW_CHUNK_DELAY_MS);
       eraseAddr += FLASH_PAGE_SIZE;
       // Log every quarter of progress, at least every 16 pages, and the last one.
       const step = Math.max(1, Math.floor(pageCount / 4));
@@ -344,6 +354,7 @@ export const performOTA = async ({
           `[OTA] chunk ${chunkIdx} latency: write=${tAfterWrite - tStart}ms notify=${tAfterNotify - tAfterWrite}ms total=${tAfterNotify - tStart}ms`
         );
       }
+      if (FW_CHUNK_DELAY_MS > 0) await sleep(FW_CHUNK_DELAY_MS);
 
       offset += take;
       writeAddr += take;

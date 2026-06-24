@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 3.0.0",
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -9,6 +9,12 @@
       "distribution": "internal",
       "ios": {
         "simulator": false
+      }
+    },
+    "development-consumer": {
+      "extends": "development",
+      "env": {
+        "APP_VARIANT": "consumer"
       }
     },
     "preview": {
@@ -20,12 +26,29 @@
         "simulator": false
       }
     },
+    "preview-consumer": {
+      "extends": "preview",
+      "env": {
+        "APP_VARIANT": "consumer"
+      }
+    },
     "production": {
       "autoIncrement": true
+    },
+    "production-consumer": {
+      "extends": "production",
+      "env": {
+        "APP_VARIANT": "consumer"
+      }
     }
   },
   "submit": {
     "production": {
+      "ios": {
+        "appleTeamId": "VXLM9VZK85"
+      }
+    },
+    "production-consumer": {
       "ios": {
         "appleTeamId": "VXLM9VZK85"
       }

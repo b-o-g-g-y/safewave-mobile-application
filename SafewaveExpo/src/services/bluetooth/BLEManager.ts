@@ -1,6 +1,7 @@
 import { Platform, PermissionsAndroid, AppState } from 'react-native';
 import { BleManager, Device, State, BleError, ConnectionPriority } from 'react-native-ble-plx';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import {
   BLEDevice,
   VibrationCommand,
@@ -150,8 +151,10 @@ const retryBleOperation = async <T>(
 const getBleManager = (): BleManager => {
   if (!bleManagerInstance) {
     if (Platform.OS === 'ios') {
+      const bundleId =
+        Constants.expoConfig?.ios?.bundleIdentifier ?? 'com.safewave.unknown';
       bleManagerInstance = new BleManager({
-        restoreStateIdentifier: 'com.safewave.ble.restore',
+        restoreStateIdentifier: `${bundleId}.ble.restore`,
         restoreStateFunction: (restoredState) => {
           if (restoredState?.connectedPeripherals?.length) {
             console.log(
@@ -438,9 +441,15 @@ export const BLEManager = {
    */
   connect: async (
     deviceId: string,
-    onBatteryUpdate?: (status: BatteryStatus) => void
+    onBatteryUpdate?: (status: BatteryStatus) => void,
+    opts?: { autoConnect?: boolean }
   ): Promise<BLEDevice> => {
     const manager = getBleManager();
+    // autoConnect:true hands reconnection to the Android GATT stack, which runs
+    // below the JS layer and survives Doze (the OS re-links when the band is back
+    // in range). Used for background reconnects; the initial user-initiated
+    // connect stays autoConnect:false for a fast, deterministic first connect.
+    const useAutoConnect = opts?.autoConnect ?? false;
 
     // Stop scanning if active
     BLEManager.stopScan();
@@ -474,16 +483,26 @@ export const BLEManager = {
         device = alreadyConnected;
       } else {
         try {
+          if (useAutoConnect) {
+            // OS-managed background reconnect: NO timeout and NO Promise.race —
+            // a race rejection would cancel the OS's indefinite reconnect. The
+            // promise resolves whenever the band comes back into range.
+            console.log('[BLE] Connecting with autoConnect:true (background reconnect)');
+            device = await manager.connectToDevice(deviceId, {
+              autoConnect: true,
+            });
+          } else {
           // Wrap connection in timeout handler to catch library-level timeout errors
           device = await Promise.race([
             manager.connectToDevice(deviceId, {
               autoConnect: false,
               timeout: 15000, // Increased timeout to 15 seconds
             }),
-            new Promise<Device>((_, reject) => 
+            new Promise<Device>((_, reject) =>
               setTimeout(() => reject(new Error('Connection timeout - device did not respond in time')), 15000)
             )
           ]);
+          }
         } catch (connectionError: any) {
           // Handle specific error cases
           const errorMessage = connectionError?.message || '';
@@ -1055,10 +1074,15 @@ export const BLEManager = {
     }
 
     try {
-      // Convert command to byte array
+      // Convert command to byte array.
+      // numBuzzes of 0 is intentional: on firmware that supports it, the band
+      // treats it as "vibrate continuously until the physical button is
+      // pressed", so allow 0 through. The upper bound is the single-byte max
+      // (255) rather than 10, so the large count used to emulate continuous
+      // mode on Android (ANDROID_CONTINUOUS_NUM_BUZZES) isn't truncated.
       const data = [
         Math.min(100, Math.max(0, command.strength)),
-        Math.min(10, Math.max(1, command.numBuzzes)),
+        Math.min(255, Math.max(0, command.numBuzzes)),
         Math.min(100, Math.max(10, command.dutyOfBuzz)),
         Math.min(100, Math.max(10, command.durationOfDelay)),
       ];

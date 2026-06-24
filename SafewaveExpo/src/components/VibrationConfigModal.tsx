@@ -8,12 +8,16 @@ import {
   TouchableWithoutFeedback,
   Alert,
   ActivityIndicator,
+  Switch,
+  TextInput,
+  ScrollView,
+  useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../theme/colors';
 import { useBluetoothStore } from '../store/bluetoothStore';
-import { VibrationCommand } from '../types/bluetooth';
+import { VibrationCommand, resolveLiveNumBuzzes } from '../types/bluetooth';
 
 // Simple Stepper Component (replaces native Slider)
 interface StepperProps {
@@ -22,9 +26,10 @@ interface StepperProps {
   max: number;
   step: number;
   onValueChange: (value: number) => void;
+  disabled?: boolean;
 }
 
-const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange }) => {
+const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange, disabled = false }) => {
   const decrement = () => {
     if (value - step >= min) {
       onValueChange(value - step);
@@ -37,14 +42,17 @@ const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange 
     }
   };
 
+  const decrementDisabled = disabled || value <= min;
+  const incrementDisabled = disabled || value >= max;
+
   return (
-    <View style={stepperStyles.container}>
+    <View style={[stepperStyles.container, disabled && stepperStyles.containerDisabled]}>
       <TouchableOpacity
-        style={[stepperStyles.button, value <= min && stepperStyles.buttonDisabled]}
+        style={[stepperStyles.button, decrementDisabled && stepperStyles.buttonDisabled]}
         onPress={decrement}
-        disabled={value <= min}
+        disabled={decrementDisabled}
       >
-        <Ionicons name="remove" size={24} color={value <= min ? colors.textMuted : colors.textPrimary} />
+        <Ionicons name="remove" size={24} color={decrementDisabled ? colors.textMuted : colors.textPrimary} />
       </TouchableOpacity>
 
       <View style={stepperStyles.track}>
@@ -57,11 +65,11 @@ const Stepper: React.FC<StepperProps> = ({ value, min, max, step, onValueChange 
       </View>
 
       <TouchableOpacity
-        style={[stepperStyles.button, value >= max && stepperStyles.buttonDisabled]}
+        style={[stepperStyles.button, incrementDisabled && stepperStyles.buttonDisabled]}
         onPress={increment}
-        disabled={value >= max}
+        disabled={incrementDisabled}
       >
-        <Ionicons name="add" size={24} color={value >= max ? colors.textMuted : colors.textPrimary} />
+        <Ionicons name="add" size={24} color={incrementDisabled ? colors.textMuted : colors.textPrimary} />
       </TouchableOpacity>
     </View>
   );
@@ -72,6 +80,9 @@ const stepperStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginVertical: spacing.sm,
+  },
+  containerDisabled: {
+    opacity: 0.4,
   },
   button: {
     width: 44,
@@ -102,10 +113,18 @@ const stepperStyles = StyleSheet.create({
 interface VibrationConfigModalProps {
   visible: boolean;
   onClose: () => void;
-  onSave: (vibrations: number, strength: number) => void | Promise<void>;
+  onSave: (
+    vibrations: number,
+    strength: number,
+    phrases: string[],
+    phraseMode: 'allow' | 'block'
+  ) => void | Promise<void>;
   appName: string;
   initialVibrations?: number;
   initialStrength?: number;
+  initialPhrases?: string[];
+  initialPhraseMode?: 'allow' | 'block';
+  platform?: 'android' | 'ios';
 }
 
 export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
@@ -115,20 +134,61 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
   appName,
   initialVibrations = 2,
   initialStrength = 50,
+  initialPhrases = [],
+  initialPhraseMode = 'allow',
+  platform = 'android',
 }) => {
-  const [vibrations, setVibrations] = useState(initialVibrations);
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  // Cap the sheet so its top (and the pinned Cancel/Save header) always clears
+  // the status bar / notch, while still hugging content when the sheet is short.
+  const maxSheetHeight = windowHeight - insets.top - spacing.md;
+
+  // 0 means "repeat until dismissed" (continuous). The stepper itself always
+  // holds a usable 1-10 value so toggling continuous off restores a real count.
+  const [continuous, setContinuous] = useState(initialVibrations === 0);
+  const [vibrations, setVibrations] = useState(initialVibrations === 0 ? 2 : initialVibrations);
   const [strength, setStrength] = useState(initialStrength);
+  const [phrases, setPhrases] = useState<string[]>(initialPhrases);
+  const [phraseMode, setPhraseMode] = useState<'allow' | 'block'>(initialPhraseMode);
+  const [phraseDraft, setPhraseDraft] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const { vibrate, connectionState } = useBluetoothStore();
+
+  // Phrase filtering is only enforced on Android (notifications are intercepted
+  // in-app there). On iOS the band does its own matching, so hide the section.
+  const showPhraseFilter = platform === 'android';
 
   // Reset values when modal opens with new initial values
   useEffect(() => {
     if (visible) {
-      setVibrations(initialVibrations);
+      setContinuous(initialVibrations === 0);
+      setVibrations(initialVibrations === 0 ? 2 : initialVibrations);
       setStrength(initialStrength);
+      setPhrases(initialPhrases);
+      setPhraseMode(initialPhraseMode);
+      setPhraseDraft('');
       setIsSaving(false);
     }
-  }, [visible, initialVibrations, initialStrength]);
+    // initialPhrases is a new array reference each render; key the reset on
+    // visibility/count so we restore from props only when the modal (re)opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, initialVibrations, initialStrength, initialPhraseMode]);
+
+  const addPhrase = () => {
+    const next = phraseDraft.trim();
+    if (!next) return;
+    setPhrases((current) =>
+      current.some((p) => p.toLowerCase() === next.toLowerCase())
+        ? current
+        : [...current, next]
+    );
+    setPhraseDraft('');
+  };
+
+  const removePhrase = (phrase: string) => {
+    setPhrases((current) => current.filter((p) => p !== phrase));
+  };
 
   const handleTestVibration = async () => {
     // Check if band is connected
@@ -142,10 +202,13 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
     }
 
     try {
-      // Create vibration command with current settings
+      // Create vibration command with current settings.
+      // In continuous mode the band repeats until the physical button is
+      // pressed: iOS firmware understands numBuzzes=0 directly, while Android
+      // needs a large finite count (resolveLiveNumBuzzes handles the mapping).
       const vibrationCommand: VibrationCommand = {
         strength: strength,
-        numBuzzes: vibrations,
+        numBuzzes: resolveLiveNumBuzzes(continuous ? 0 : vibrations, platform),
         dutyOfBuzz: 50, // Default duty cycle
         durationOfDelay: 50, // Default delay between buzzes
       };
@@ -163,7 +226,9 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onSave(vibrations, strength);
+      // Only persist phrase rules for platforms where they apply.
+      const phrasesToSave = showPhraseFilter ? phrases : [];
+      await onSave(continuous ? 0 : vibrations, strength, phrasesToSave, phraseMode);
     } catch (error) {
       console.error('Error saving configuration:', error);
     } finally {
@@ -188,8 +253,8 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
       <TouchableWithoutFeedback onPress={isSaving ? undefined : onClose}>
         <View style={styles.overlay}>
           <TouchableWithoutFeedback>
-            <View style={styles.modalContent}>
-              <SafeAreaView edges={['bottom']}>
+            <View style={[styles.modalContent, { maxHeight: maxSheetHeight }]}>
+              <SafeAreaView edges={['bottom']} style={styles.safeAreaBody}>
                 {/* Handle bar */}
                 <View style={styles.handleBar} />
 
@@ -216,6 +281,12 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
                   </TouchableOpacity>
                 </View>
 
+                <ScrollView
+                  style={styles.scrollArea}
+                  contentContainerStyle={styles.scrollContent}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
                 {/* App Name */}
                 <Text style={styles.appName}>{appName}</Text>
 
@@ -226,14 +297,37 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
                       <Ionicons name="pulse" size={20} color={colors.accent} />
                       <Text style={styles.configLabel}>Number of Vibrations</Text>
                     </View>
-                    <Text style={styles.configValue}>{vibrations}x</Text>
+                    {continuous ? (
+                      <View style={styles.continuousValue}>
+                        <Ionicons name="infinite" size={18} color={colors.accent} />
+                        <Text style={[styles.configValue, styles.continuousValueText]}>
+                          Continuous
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.configValue}>{vibrations}x</Text>
+                    )}
                   </View>
+
+                  {/* Repeat until dismissed toggle */}
+                  <View style={styles.continuousRow}>
+                    <Text style={styles.continuousLabel}>Repeat until dismissed</Text>
+                    <Switch
+                      value={continuous}
+                      onValueChange={setContinuous}
+                      trackColor={{ false: colors.surfaceLight, true: colors.accent }}
+                      thumbColor={colors.textPrimary}
+                      ios_backgroundColor={colors.surfaceLight}
+                    />
+                  </View>
+
                   <Stepper
                     value={vibrations}
                     min={1}
                     max={10}
                     step={1}
                     onValueChange={setVibrations}
+                    disabled={continuous}
                   />
                   <View style={styles.sliderLabels}>
                     <Text style={styles.sliderLabel}>1</Text>
@@ -267,26 +361,126 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
                   </View>
                 </View>
 
+                {/* Notification filter (Android only) */}
+                {showPhraseFilter && (
+                  <View style={styles.configSection}>
+                    <View style={styles.configHeader}>
+                      <View style={styles.configLabelRow}>
+                        <Ionicons name="funnel" size={20} color={colors.accent} />
+                        <Text style={styles.configLabel}>Notification Filter</Text>
+                      </View>
+                    </View>
+
+                    {/* Mode toggle — only relevant once phrases exist */}
+                    {phrases.length > 0 && (
+                      <View style={styles.continuousRow}>
+                        <Text style={styles.continuousLabel}>
+                          {phraseMode === 'allow'
+                            ? 'Only vibrate for matches'
+                            : 'Mute matches, vibrate for the rest'}
+                        </Text>
+                        <Switch
+                          value={phraseMode === 'allow'}
+                          onValueChange={(on) => setPhraseMode(on ? 'allow' : 'block')}
+                          trackColor={{ false: colors.surfaceLight, true: colors.accent }}
+                          thumbColor={colors.textPrimary}
+                          ios_backgroundColor={colors.surfaceLight}
+                        />
+                      </View>
+                    )}
+
+                    {/* Phrase entry row */}
+                    <View style={styles.phraseInputRow}>
+                      <TextInput
+                        style={styles.phraseInput}
+                        value={phraseDraft}
+                        onChangeText={setPhraseDraft}
+                        onSubmitEditing={addPhrase}
+                        placeholder="Add a word or phrase"
+                        placeholderTextColor={colors.textMuted}
+                        returnKeyType="done"
+                        autoCapitalize="none"
+                      />
+                      <TouchableOpacity
+                        style={[
+                          styles.phraseAddButton,
+                          !phraseDraft.trim() && styles.phraseAddButtonDisabled,
+                        ]}
+                        onPress={addPhrase}
+                        disabled={!phraseDraft.trim()}
+                      >
+                        <Ionicons name="add" size={24} color={colors.textPrimary} />
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Current phrases as removable chips */}
+                    {phrases.length > 0 ? (
+                      <View style={styles.chipContainer}>
+                        {phrases.map((phrase) => (
+                          <TouchableOpacity
+                            key={phrase}
+                            style={styles.chip}
+                            onPress={() => removePhrase(phrase)}
+                          >
+                            <Text style={styles.chipText} numberOfLines={1}>
+                              {phrase}
+                            </Text>
+                            <Ionicons name="close" size={14} color={colors.textSecondary} />
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    ) : (
+                      <Text style={styles.phraseHelperText}>
+                        Vibrates for all notifications from this app. Add a phrase to vibrate only
+                        for matching notifications.
+                      </Text>
+                    )}
+                  </View>
+                )}
+
                 {/* Preview */}
                 <View style={styles.previewSection}>
                   <Text style={styles.previewLabel}>Preview</Text>
                   <View style={styles.previewVisual}>
-                    {Array.from({ length: vibrations }).map((_, i) => (
-                      <View
-                        key={i}
-                        style={[
-                          styles.previewDot,
-                          {
-                            opacity: 0.3 + (strength / 100) * 0.7,
-                            transform: [{ scale: 0.5 + (strength / 100) * 0.5 }],
-                          },
-                        ]}
-                      />
-                    ))}
+                    {continuous ? (
+                      <View style={styles.previewContinuous}>
+                        <View
+                          style={[
+                            styles.previewDot,
+                            {
+                              opacity: 0.3 + (strength / 100) * 0.7,
+                              transform: [{ scale: 0.5 + (strength / 100) * 0.5 }],
+                            },
+                          ]}
+                        />
+                        <Ionicons name="infinite" size={24} color={colors.accent} />
+                      </View>
+                    ) : (
+                      Array.from({ length: vibrations }).map((_, i) => (
+                        <View
+                          key={i}
+                          style={[
+                            styles.previewDot,
+                            {
+                              opacity: 0.3 + (strength / 100) * 0.7,
+                              transform: [{ scale: 0.5 + (strength / 100) * 0.5 }],
+                            },
+                          ]}
+                        />
+                      ))
+                    )}
                   </View>
                 </View>
 
-                {/* Test Button */}
+                {/* Info */}
+                <Text style={styles.infoText}>
+                  {continuous
+                    ? 'Your band will keep vibrating until you press the button on the band when you receive a notification from this app.'
+                    : 'Your band will vibrate with these settings when you receive a notification from this app.'}
+                </Text>
+                </ScrollView>
+
+                {/* Test Button (pinned below the scroll area so it's always reachable) */}
                 <TouchableOpacity
                   style={[styles.testButton, isSaving && styles.disabledButton]}
                   onPress={handleTestVibration}
@@ -295,11 +489,6 @@ export const VibrationConfigModal: React.FC<VibrationConfigModalProps> = ({
                   <Ionicons name="phone-portrait-outline" size={20} color={colors.textPrimary} />
                   <Text style={styles.testButtonText}>Test on Band</Text>
                 </TouchableOpacity>
-
-                {/* Info */}
-                <Text style={styles.infoText}>
-                  Your band will vibrate with these settings when you receive a notification from this app.
-                </Text>
               </SafeAreaView>
             </View>
           </TouchableWithoutFeedback>
@@ -321,6 +510,20 @@ const styles = StyleSheet.create({
     borderTopRightRadius: borderRadius.xl,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.lg,
+    // maxHeight is applied inline from the safe-area inset so the sheet's top
+    // always clears the status bar; the body (ScrollView) scrolls instead.
+    // Keeps the handle bar + header (Cancel/Save) pinned and always visible.
+  },
+  safeAreaBody: {
+    // Allow the body to shrink so the inner ScrollView gets a bounded height.
+    flexShrink: 1,
+  },
+  scrollArea: {
+    // Lets the scrollable body shrink within the capped modal height.
+    flexShrink: 1,
+  },
+  scrollContent: {
+    paddingBottom: spacing.sm,
   },
   handleBar: {
     width: 40,
@@ -393,6 +596,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.accent,
   },
+  continuousValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  continuousValueText: {
+    marginLeft: spacing.xs,
+  },
+  continuousRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  continuousLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
   sliderLabels: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -401,6 +621,60 @@ const styles = StyleSheet.create({
   sliderLabel: {
     fontSize: 12,
     color: colors.textMuted,
+  },
+  phraseInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  phraseInput: {
+    flex: 1,
+    height: 44,
+    backgroundColor: colors.surfaceLight,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    color: colors.textPrimary,
+    fontSize: 15,
+  },
+  phraseAddButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: spacing.sm,
+  },
+  phraseAddButtonDisabled: {
+    opacity: 0.4,
+  },
+  chipContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: spacing.md,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceLight,
+    borderRadius: borderRadius.round,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    marginRight: spacing.sm,
+    marginBottom: spacing.sm,
+    maxWidth: '100%',
+  },
+  chipText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    marginRight: spacing.xs,
+    flexShrink: 1,
+  },
+  phraseHelperText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    lineHeight: 18,
+    marginTop: spacing.sm,
   },
   previewSection: {
     alignItems: 'center',
@@ -417,6 +691,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: 40,
   },
+  previewContinuous: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   previewDot: {
     width: 20,
     height: 20,
@@ -431,7 +710,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     borderRadius: borderRadius.lg,
     paddingVertical: spacing.md,
-    marginBottom: spacing.lg,
+    marginTop: spacing.md,
   },
   testButtonText: {
     fontSize: 16,
