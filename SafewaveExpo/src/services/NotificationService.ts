@@ -2,6 +2,13 @@ import { FirestoreService } from './firebase/FirestoreService';
 import { ApplicationDocument } from '../types/user';
 
 /**
+ * How long after a notification a band button press still counts as an
+ * acknowledgement of it. The band buzzes until acknowledged (numBuzzes=0), so
+ * this bounds how late a user can react and still have the press attributed.
+ */
+const ACK_WINDOW_MS = 3 * 60 * 1000;
+
+/**
  * Service to handle notifications received from the Safewave Band
  */
 export const NotificationService = {
@@ -9,6 +16,21 @@ export const NotificationService = {
   _appsCache: new Map<string, ApplicationDocument>(),
   _userId: null as string | null,
   _unsubscribe: null as (() => void) | null,
+
+  // The band's button-ack carries no reference to what it acknowledges (the
+  // payload is a bare 0x01), so the ack is attributed to the most recent
+  // notification that actually buzzed the band, provided it is still within
+  // ACK_WINDOW_MS. Presses outside the window are treated as unattributed
+  // button presses rather than acknowledgements of a stale alert.
+  _notificationSeq: 0,
+  _lastNotification: null as {
+    seq: number;
+    raw: string;
+    appName: string | null;
+    historyId: string | null;
+    at: number;
+    acknowledged: boolean;
+  } | null,
 
   /**
    * Initialize the notification service with user ID
@@ -72,7 +94,17 @@ export const NotificationService = {
       return;
     }
 
-    console.log('[NotificationService] Processing notification for:', trimmedBundleId);
+    const seq = ++NotificationService._notificationSeq;
+    NotificationService._lastNotification = {
+      seq,
+      raw: trimmedBundleId,
+      appName: null,
+      historyId: null,
+      at: Date.now(),
+      acknowledged: false,
+    };
+
+    console.log(`[NotificationService] [seq ${seq}] Processing notification for:`, trimmedBundleId);
 
     try {
       // Look up the app in our cache
@@ -80,26 +112,77 @@ export const NotificationService = {
 
       // Only save notifications for monitored (enabled) apps
       if (!app) {
-        console.log('[NotificationService] App not in user\'s monitored list, skipping:', trimmedBundleId);
+        console.log(`[NotificationService] [seq ${seq}] App not in user's monitored list, NO history written:`, trimmedBundleId);
         return;
       }
 
       if (!app.enabled) {
-        console.log('[NotificationService] App is disabled, skipping:', trimmedBundleId);
+        console.log(`[NotificationService] [seq ${seq}] App is disabled, NO history written:`, trimmedBundleId);
         return;
       }
 
       // Create history record
-      await FirestoreService.createHistory({
+      const historyId = await FirestoreService.createHistory({
         appName: app.name,
         bundleIdentifier: trimmedBundleId,
         userId: NotificationService._userId,
         message: `Notification from ${app.name}`,
       });
 
-      console.log('[NotificationService] History record created for:', app.name);
+      // Only attach the id if this is still the most recent notification —
+      // a newer one may have landed while the Firestore write was in flight.
+      if (NotificationService._lastNotification?.seq === seq) {
+        NotificationService._lastNotification.appName = app.name;
+        NotificationService._lastNotification.historyId = historyId;
+      }
+
+      console.log(`[NotificationService] [seq ${seq}] History record CREATED for:`, app.name, historyId);
     } catch (error) {
-      console.error('[NotificationService] Error processing notification:', error);
+      console.error(`[NotificationService] [seq ${seq}] Error processing notification:`, error);
+    }
+  },
+
+  /**
+   * Handle a button-ack from the band. Attributes the press to the most recent
+   * notification if it buzzed the band within ACK_WINDOW_MS, and marks that
+   * notification's history record as acknowledged.
+   *
+   * Returns true if the press was attributed to a notification.
+   */
+  handleButtonAck: async (): Promise<boolean> => {
+    const last = NotificationService._lastNotification;
+
+    if (!last || !last.historyId) {
+      console.log('[NotificationService] Button ack with no recent buzzing notification — unattributed press');
+      return false;
+    }
+
+    if (last.acknowledged) {
+      console.log(`[NotificationService] [seq ${last.seq}] Already acknowledged, ignoring repeat press`);
+      return false;
+    }
+
+    const elapsed = Date.now() - last.at;
+    if (elapsed > ACK_WINDOW_MS) {
+      console.log(
+        `[NotificationService] Button ack ${elapsed}ms after [seq ${last.seq}] — outside ${ACK_WINDOW_MS}ms window, unattributed`
+      );
+      return false;
+    }
+
+    // Mark before awaiting so a double-press can't double-write.
+    last.acknowledged = true;
+
+    try {
+      await FirestoreService.markHistoryAcknowledged(last.historyId);
+      console.log(
+        `[NotificationService] [seq ${last.seq}] ACKNOWLEDGED "${last.appName}" after ${elapsed}ms`
+      );
+      return true;
+    } catch (error) {
+      last.acknowledged = false; // allow a retry on the next press
+      console.error('[NotificationService] Failed to mark history acknowledged:', error);
+      return false;
     }
   },
 };

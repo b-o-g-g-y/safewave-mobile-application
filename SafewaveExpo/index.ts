@@ -1,6 +1,10 @@
 import { registerRootComponent } from 'expo';
 import { LogBox } from 'react-native';
 
+// Must be registered before registerRootComponent: on a cold background push,
+// RN looks for the handler as soon as the bundle is evaluated.
+import './src/services/alerts/registerBackgroundHandler';
+
 import App from './App';
 
 // Catch unhandled promise rejections globally to prevent silent crashes

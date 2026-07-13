@@ -39,6 +39,12 @@ const RECONNECT_CONNECT_DELAY_MS = 1000;
 
 const CONNECT_TIMEOUT_MS = 30000; // 30s overall timeout for the entire connect flow
 
+// How long vibrate() waits for a dropped link to come back before giving up on
+// the buzz. Kept short so alerts stay responsive — the OS autoConnect usually
+// restores the link well within this window.
+const VIBRATE_RECONNECT_TIMEOUT_MS = 8000;
+const VIBRATE_RECONNECT_POLL_MS = 500;
+
 const SAFEWAVE_SERVICE_UUIDS = [
   BATTERY_SERVICE_UUID,
   DEVICE_INFO_SERVICE_UUID,
@@ -86,6 +92,21 @@ let disconnectSubscription: (() => void) | null = null;
 let disconnectHandled = false;
 // Throttle 'startAutoReconnect skipped' log
 let lastReconnectSkipLogTime = 0;
+
+/**
+ * Poll the native connection state until the band is connected or the timeout
+ * elapses. Used by vibrate() to wait, bounded, for a dropped link to recover.
+ */
+const waitForConnection = async (timeoutMs: number): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await BLEManager.isConnected()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, VIBRATE_RECONNECT_POLL_MS));
+  }
+  return BLEManager.isConnected();
+};
 
 /**
  * Initial Bluetooth state
@@ -255,9 +276,10 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
             reconnectScanTimeoutId = null;
           }
           BLEManager.stopScan();
-          // Connect immediately -- setTimeout delays are unreliable in background
+          // Connect immediately -- setTimeout delays are unreliable in background.
+          // background:true uses OS-level autoConnect so the link survives Doze.
           console.log('[BLE Store] Reconnect: calling connect()...');
-          get().connect(device.id)
+          get().connect(device.id, { background: true })
             .then(() => {
               console.log('[BLE Store] Reconnect: connect succeeded!');
               get().stopAutoReconnect();
@@ -508,7 +530,7 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
           ) {
             BLEManager.stopScan();
             set({ isScanning: false });
-            get().connect(device.id).catch((err) => {
+            get().connect(device.id, { background: true }).catch((err) => {
               console.log('[BLE Store] Auto-connect from scan failed:', err?.message || err);
               set({ connectionState: 'idle' });
             });
@@ -607,7 +629,7 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
           ) {
             BLEManager.stopScan();
             set({ isScanning: false });
-            get().connect(device.id).catch((err) => {
+            get().connect(device.id, { background: true }).catch((err) => {
               console.log('[BLE Store] Auto-connect from unfiltered scan failed:', err?.message || err);
               set({ connectionState: 'idle' });
             });
@@ -667,7 +689,7 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
   /**
    * Connect to a device
    */
-  connect: async (deviceId: string) => {
+  connect: async (deviceId: string, opts?: { background?: boolean }) => {
     // Guard against concurrent connect calls
     const { connectionState: currentState } = get();
     if (currentState === 'connecting') {
@@ -679,6 +701,9 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
     // BEFORE stopAutoReconnect clears the flag.
     const isReconnect = reconnectInFlight;
     const savedReconnectName = isReconnect ? get().reconnectingDeviceName : null;
+    // Use OS-level autoConnect for background re-connects (Doze-resilient).
+    // Defaults to the reconnect case so existing reconnect callers get it for free.
+    const useAutoConnect = opts?.background ?? isReconnect;
 
     // Stop any active scans before connecting
     BLEManager.stopScan();
@@ -751,7 +776,7 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
             ).catch(console.error);
           }
         }
-      });
+      }, { autoConnect: useAutoConnect });
 
       // If the timeout already fired, bail out and clean up
       if (connectTimedOut) {
@@ -836,6 +861,28 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
             console.log('[BLE Store] Notification received:', notificationData);
             NotificationService.processNotification(notificationData);
           });
+          // The band notifies with a bare 0x01 when the user presses the
+          // physical button, acknowledging the buzz it is currently playing.
+          //
+          // The press carries no reference to what it acknowledges, so we have
+          // to attribute it. An admin alert wins over an ordinary phone
+          // notification: it's a targeted safety alert and the dashboard is
+          // waiting on the acknowledgement. Only if there's no alert pending
+          // does the press fall through to the phone-notification path.
+          BLEManager.subscribeToButtonAck((bytes: number[]) => {
+            console.log('[BLE Store] Button ack from band:', bytes);
+            // Lazy import to break circular dependency:
+            // bluetoothStore -> AlertService -> alertStore -> bluetoothStore
+            const { AlertService } = require('../services/alerts/AlertService');
+            AlertService.handleButtonAck()
+              .then((acknowledgedAlert: boolean) => {
+                if (acknowledgedAlert) return;
+                return NotificationService.handleButtonAck();
+              })
+              .catch((err: any) => {
+                console.error('[BLE Store] Button ack handling failed:', err);
+              });
+          });
           break;
         } catch (err: any) {
           console.log(`[BLE Store] subscribeToNotifications attempt ${attempt + 1}/3 failed:`, err?.message || err);
@@ -916,9 +963,10 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
 
             get().startAutoReconnect(disconnectedDevice?.id, disconnectedDevice?.name || undefined);
           } else {
-            // Manual disconnect — stop the foreground service entirely
+            // Manual disconnect — stop the foreground service and wake-tick entirely
             try {
               ForegroundServiceManager.stopService();
+              ForegroundServiceManager.stopBackgroundTicks();
             } catch (fgError) {
               console.error('[BLE Store] ForegroundService stop failed:', fgError);
             }
@@ -1016,10 +1064,20 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
       // Start Android foreground service to keep the process alive in background
       try {
         ForegroundServiceManager.startService(bandName);
+        // Doze-piercing wake-tick: drives reconnect/health checks even when JS
+        // timers are frozen by Doze.
+        ForegroundServiceManager.startBackgroundTicks();
       } catch (fgError) {
         console.error('[BLE Store] ForegroundService start failed:', fgError);
       }
       console.log('[BLE Store] Connection flow complete — state: connected');
+
+      // An alert may have arrived while the link was down (cold start, or a
+      // dropped connection) and be sitting un-buzzed. Now that the band is
+      // reachable, buzz it. Lazy import to break the circular dependency:
+      // bluetoothStore -> AlertService -> alertStore -> bluetoothStore
+      const { AlertService } = require('../services/alerts/AlertService');
+      AlertService.onBandConnected();
     } catch (error: any) {
       clearTimeout(connectTimeoutId);
       if (!connectTimedOut) {
@@ -1048,8 +1106,9 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
     get().stopBandHeartbeat();
     get().stopAutoReconnect();
 
-    // Stop the Android foreground service
+    // Stop the Android foreground service and the Doze wake-tick
     ForegroundServiceManager.stopService();
+    ForegroundServiceManager.stopBackgroundTicks();
 
     try {
       await BLEManager.disconnect();
@@ -1124,21 +1183,78 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
   },
 
   /**
-   * Send vibration command to the band
+   * Native AlarmManager wake-tick handler — fires even in Doze (when JS timers
+   * are frozen). Verifies the link and kicks a reconnect if it's down, and
+   * drives one heartbeat update (the heartbeat setInterval is itself Doze-frozen).
+   */
+  onBackgroundTick: async () => {
+    console.log('[BLE Store] Background tick received');
+    try {
+      const connected = await BLEManager.isConnected();
+      if (!connected) {
+        const { connectionState } = get();
+        // Only kick a reconnect if we're not already mid-connect/reconnect.
+        if (
+          connectionState !== 'connecting' &&
+          connectionState !== 'reconnecting' &&
+          !reconnectInFlight
+        ) {
+          console.log('[BLE Store] Background tick: link down, starting reconnect');
+          get().startAutoReconnect();
+        }
+      } else {
+        // Link is healthy — drive a heartbeat update that the frozen interval missed.
+        get().startBandHeartbeat();
+      }
+    } catch (error) {
+      console.error('[BLE Store] Background tick handler error:', error);
+    }
+  },
+
+  /**
+   * Send a vibration command to the band, self-healing if the link dropped.
+   *
+   * After a Doze drop the band may be disconnected (or the app may think it's
+   * connected but the GATT write fails). Rather than silently dropping the buzz,
+   * we attempt the write, and on failure kick a reconnect and retry once within
+   * a bounded window. If the link can't be restored in time we give up quietly
+   * (the caller still logs the notification to history).
    */
   vibrate: async (command: VibrationCommand) => {
-    const { connectedDevice } = get();
+    // Attempt 1: optimistic write. BLEManager.vibrate pre-checks isConnected()
+    // and throws on a stale handle, so a dead-but-thought-connected link surfaces
+    // here as a catch rather than a silent no-op.
+    if (get().connectedDevice) {
+      try {
+        await BLEManager.vibrate(command);
+        return;
+      } catch (error: any) {
+        console.log('[BLE Store] vibrate: first attempt failed, will reconnect:', error?.message || error);
+      }
+    } else {
+      console.log('[BLE Store] vibrate: no connected device, attempting reconnect before buzz');
+    }
 
-    if (!connectedDevice) {
-      set({ error: 'No device connected' });
+    // Link is down. Kick a reconnect (unless one is already running) and wait,
+    // bounded, for it to come up. Use startAutoReconnect (not connect() directly)
+    // so the existing concurrency guards apply.
+    if (!reconnectInFlight) {
+      get().startAutoReconnect();
+    }
+
+    const connected = await waitForConnection(VIBRATE_RECONNECT_TIMEOUT_MS);
+    if (!connected) {
+      console.log('[BLE Store] vibrate: could not reconnect within', VIBRATE_RECONNECT_TIMEOUT_MS, 'ms — skipping buzz');
+      set({ error: null });
       return;
     }
 
+    // Attempt 2: retry the write once now that the link is back.
     try {
       await BLEManager.vibrate(command);
     } catch (error: any) {
-      set({ error: error.message || 'Failed to send vibration' });
-      throw error;
+      console.log('[BLE Store] vibrate: retry after reconnect failed:', error?.message || error);
+      set({ error: null });
     }
   },
 
@@ -1378,6 +1494,7 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
    */
   reset: () => {
     ForegroundServiceManager.stopService();
+    ForegroundServiceManager.stopBackgroundTicks();
     BLEManager.destroy();
     set(initialState);
   },

@@ -22,7 +22,7 @@ import { useBluetoothStore } from '../../store/bluetoothStore';
 import { FirestoreService } from '../../services/firebase/FirestoreService';
 import { NotificationListenerService } from '../../services/NotificationListenerService';
 import { promptNotificationAccess } from '../../utils/permissions';
-import { ApplicationDocument } from '../../types/user';
+import { ApplicationDocument, VibrationConfig } from '../../types/user';
 
 // Extended type with Firestore document ID
 type AppWithId = ApplicationDocument & { id: string };
@@ -145,16 +145,27 @@ export const AlertsScreen: React.FC = () => {
     setShowVibrationConfig(true);
   };
 
-  const handleSaveConfig = async (vibrations: number, strength: number) => {
+  const handleSaveConfig = async (
+    vibrations: number,
+    strength: number,
+    phrases: string[],
+    phraseMode: 'allow' | 'block'
+  ) => {
     try {
+      // Build the config once. Preserve any existing secondary fields, and only
+      // carry phrase rules when at least one phrase is set. An empty list is
+      // written explicitly so clearing all phrases reverts to "vibrate for all".
+      const config: VibrationConfig = {
+        ...(selectedApp?.config ?? {}),
+        numberOfVibrations: vibrations,
+        strength: strength,
+        phrases: phrases,
+        phraseMode: phrases.length > 0 ? phraseMode : 'allow',
+      };
+
       if (selectedApp) {
         // Update existing app
-        await FirestoreService.updateApp(selectedApp.id, {
-          config: {
-            numberOfVibrations: vibrations,
-            strength: strength,
-          },
-        });
+        await FirestoreService.updateApp(selectedApp.id, { config });
       } else if (pendingNewApp && user?.uid) {
         // Create new app
         // Get bandId from connected device or first registered band
@@ -167,10 +178,7 @@ export const AlertsScreen: React.FC = () => {
           enabled: true,
           bandId: bandId,
           appPlatform: Platform.OS as 'android' | 'ios',
-          config: {
-            numberOfVibrations: vibrations,
-            strength: strength,
-          },
+          config,
         };
 
         await FirestoreService.createApps([newAppData], user.uid);
@@ -401,6 +409,7 @@ export const AlertsScreen: React.FC = () => {
                   enabled={item.enabled}
                   vibrations={item.config.numberOfVibrations}
                   strength={item.config.strength}
+                  filterCount={item.config.phrases?.length ?? 0}
                   onToggle={() => handleToggleApp(item.id)}
                   onEdit={() => handleEditApp(item)}
                   onDelete={() => handleDeleteApp(item.id)}
@@ -439,8 +448,13 @@ export const AlertsScreen: React.FC = () => {
         }}
         onSave={handleSaveConfig}
         appName={selectedApp?.name || pendingNewApp?.name || ''}
-        initialVibrations={selectedApp?.config.numberOfVibrations || 2}
-        initialStrength={selectedApp?.config.strength || 50}
+        // 0 means "continuous" and must survive as 0, so fall back with ?? and
+        // not || (which would turn a saved continuous config back into 2x).
+        initialVibrations={selectedApp?.config.numberOfVibrations ?? 2}
+        initialStrength={selectedApp?.config.strength ?? 50}
+        initialPhrases={selectedApp?.config.phrases ?? []}
+        initialPhraseMode={selectedApp?.config.phraseMode ?? 'allow'}
+        platform={Platform.OS as 'android' | 'ios'}
       />
     </ImageBackground>
   );

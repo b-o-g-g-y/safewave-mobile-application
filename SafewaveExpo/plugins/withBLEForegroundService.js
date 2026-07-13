@@ -262,18 +262,26 @@ public class BLEForegroundService extends Service {
       // ==================== BLEForegroundServiceModule.java ====================
       const moduleContent = `package ${packageName};
 
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
+import android.text.TextUtils;
 import android.util.Log;
 
+import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 
 /**
  * React Native native module to start/stop the BLE foreground service
- * from JavaScript.
+ * from JavaScript, and to check/request the OS-level grants that keep the
+ * service alive (battery-optimization exemption, notification-listener
+ * access) plus deep-link into OEM auto-start / protected-app screens.
  */
 public class BLEForegroundServiceModule extends ReactContextBaseJavaModule {
     private static final String TAG = "BLEForegroundService";
@@ -350,6 +358,203 @@ public class BLEForegroundServiceModule extends ReactContextBaseJavaModule {
             Log.e(TAG, "Error stopping foreground service", e);
         }
     }
+
+    // ==================== Background wake-tick (Doze-piercing) ====================
+
+    /**
+     * Start the periodic AlarmManager wake-tick that survives Doze. Called from
+     * JS when a BLE connection is established (alongside the foreground service).
+     */
+    @ReactMethod
+    public void startBackgroundTicks() {
+        Log.d(TAG, "startBackgroundTicks called");
+        try {
+            BackgroundTickReceiver.schedule(getReactApplicationContext());
+        } catch (Exception e) {
+            Log.e(TAG, "Error starting background ticks", e);
+        }
+    }
+
+    /** Stop the wake-tick. Called on manual disconnect / logout. */
+    @ReactMethod
+    public void stopBackgroundTicks() {
+        Log.d(TAG, "stopBackgroundTicks called");
+        try {
+            BackgroundTickReceiver.cancel(getReactApplicationContext());
+        } catch (Exception e) {
+            Log.e(TAG, "Error stopping background ticks", e);
+        }
+    }
+
+    // ==================== Battery optimization exemption ====================
+
+    /**
+     * Whether this app is exempt from battery optimization (Doze allowlist).
+     * When false, aggressive OEM power management may kill the foreground
+     * service. Always resolves true below Android M (no optimization there).
+     */
+    @ReactMethod
+    public void isIgnoringBatteryOptimizations(Promise promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                promise.resolve(true);
+                return;
+            }
+            Context context = getReactApplicationContext();
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            boolean ignoring = pm != null
+                && pm.isIgnoringBatteryOptimizations(context.getPackageName());
+            promise.resolve(ignoring);
+        } catch (Exception e) {
+            Log.e(TAG, "isIgnoringBatteryOptimizations failed", e);
+            promise.reject("ERR_BATTERY_OPT", e);
+        }
+    }
+
+    /**
+     * Show the system prompt asking the user to exclude this app from battery
+     * optimization. Falls back to the battery-optimization list screen if the
+     * direct request intent is unavailable on the device.
+     */
+    @ReactMethod
+    public void requestIgnoreBatteryOptimizations(Promise promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                promise.resolve(true);
+                return;
+            }
+            Context context = getReactApplicationContext();
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + context.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (intent.resolveActivity(context.getPackageManager()) != null) {
+                context.startActivity(intent);
+                promise.resolve(true);
+                return;
+            }
+            // Fallback: the global battery-optimization list.
+            Intent listIntent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+            listIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(listIntent);
+            promise.resolve(true);
+        } catch (Exception e) {
+            Log.e(TAG, "requestIgnoreBatteryOptimizations failed", e);
+            promise.reject("ERR_BATTERY_OPT_REQUEST", e);
+        }
+    }
+
+    // ==================== Notification-listener access ====================
+
+    /**
+     * Whether this app is currently granted notification-listener access.
+     * Reads the system's enabled_notification_listeners setting and checks for
+     * our package, so it reflects the real grant (unlike the optimistic JS flag).
+     */
+    @ReactMethod
+    public void isNotificationListenerEnabled(Promise promise) {
+        try {
+            Context context = getReactApplicationContext();
+            String pkg = context.getPackageName();
+            String flat = Settings.Secure.getString(
+                context.getContentResolver(), "enabled_notification_listeners");
+            boolean enabled = false;
+            if (!TextUtils.isEmpty(flat)) {
+                for (String name : flat.split(":")) {
+                    ComponentName cn = ComponentName.unflattenFromString(name);
+                    if (cn != null && pkg.equals(cn.getPackageName())) {
+                        enabled = true;
+                        break;
+                    }
+                }
+            }
+            promise.resolve(enabled);
+        } catch (Exception e) {
+            Log.e(TAG, "isNotificationListenerEnabled failed", e);
+            promise.reject("ERR_NLS_CHECK", e);
+        }
+    }
+
+    /**
+     * Open the system notification-listener access settings screen.
+     */
+    @ReactMethod
+    public void openNotificationListenerSettings(Promise promise) {
+        try {
+            Context context = getReactApplicationContext();
+            Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+            promise.resolve(true);
+        } catch (Exception e) {
+            Log.e(TAG, "openNotificationListenerSettings failed", e);
+            promise.reject("ERR_NLS_OPEN", e);
+        }
+    }
+
+    // ==================== OEM auto-start / protected-app ====================
+
+    /** Device manufacturer (lowercased), so JS can decide whether to show the OEM step. */
+    @ReactMethod
+    public void getManufacturer(Promise promise) {
+        try {
+            promise.resolve(Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase());
+        } catch (Exception e) {
+            promise.reject("ERR_MANUFACTURER", e);
+        }
+    }
+
+    /**
+     * Best-effort deep-link into the OEM auto-start / protected-app manager.
+     * The activities below vary by manufacturer and OS version, so each is
+     * tried in turn and we fall back to this app's details screen if none
+     * resolve. Resolves true if a known OEM screen opened, false if we landed
+     * on the generic fallback (the JS layer uses this to tailor its guidance).
+     */
+    @ReactMethod
+    public void openAutoStartSettings(Promise promise) {
+        Context context = getReactApplicationContext();
+        // (package, class) pairs for the known "don't kill my app" screens.
+        String[][] components = new String[][] {
+            {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+            {"com.letv.android.letvsafe", "com.letv.android.letvsafe.AutobootManageActivity"},
+            {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
+            {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"},
+            {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+            {"com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"},
+            {"com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"},
+            {"com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"},
+            {"com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"},
+            {"com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
+            {"com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity"},
+            {"com.samsung.android.sm", "com.samsung.android.sm.ui.battery.BatteryActivity"},
+            {"com.oneplus.security", "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"},
+        };
+        for (String[] c : components) {
+            try {
+                Intent intent = new Intent();
+                intent.setComponent(new ComponentName(c[0], c[1]));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (intent.resolveActivity(context.getPackageManager()) != null) {
+                    context.startActivity(intent);
+                    promise.resolve(true);
+                    return;
+                }
+            } catch (Exception ignored) {
+                // Try the next candidate.
+            }
+        }
+        // Fallback: this app's details page, where battery/auto-start toggles live.
+        try {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.parse("package:" + context.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+            promise.resolve(false);
+        } catch (Exception e) {
+            Log.e(TAG, "openAutoStartSettings fallback failed", e);
+            promise.reject("ERR_AUTOSTART", e);
+        }
+    }
 }
 `;
 
@@ -389,6 +594,199 @@ public class BLEForegroundServicePackage implements ReactPackage {
       fs.writeFileSync(path.join(javaDir, 'BLEForegroundServicePackage.java'), packageFileContent);
       console.log('✅ BLEForegroundServicePackage.java created successfully');
 
+      // ==================== BootReceiver.java ====================
+      const bootReceiverContent = `package ${packageName};
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Build;
+import android.util.Log;
+
+/**
+ * Restarts the BLE foreground service after the device reboots, so the band
+ * reconnects without the user manually reopening the app.
+ *
+ * Reuses the state BLEForegroundService persists: only restarts when the
+ * service was running before shutdown. The service comes up in "reconnecting"
+ * state; the React Native layer performs the actual reconnect once it inits.
+ */
+public class BootReceiver extends BroadcastReceiver {
+    private static final String TAG = "BLEBootReceiver";
+    private static final String PREFS_NAME = "BLEForegroundServicePrefs";
+    private static final String PREF_WAS_RUNNING = "was_running";
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent != null ? intent.getAction() : null;
+        Log.d(TAG, "onReceive: " + action);
+
+        if (action == null) {
+            return;
+        }
+        if (!Intent.ACTION_BOOT_COMPLETED.equals(action)
+            && !"android.intent.action.QUICKBOOT_POWERON".equals(action)
+            && !"com.htc.intent.action.QUICKBOOT_POWERON".equals(action)) {
+            return;
+        }
+
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        boolean wasRunning = prefs.getBoolean(PREF_WAS_RUNNING, false);
+        if (!wasRunning) {
+            Log.d(TAG, "Service was not running before reboot, not restarting");
+            return;
+        }
+
+        try {
+            Intent serviceIntent = new Intent(context, BLEForegroundService.class);
+            serviceIntent.setAction(BLEForegroundService.ACTION_START);
+            serviceIntent.putExtra(BLEForegroundService.EXTRA_STATUS, "reconnecting");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent);
+            } else {
+                context.startService(serviceIntent);
+            }
+            Log.d(TAG, "Foreground service restarted after boot");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to restart foreground service after boot", e);
+        }
+    }
+}
+`;
+
+      fs.writeFileSync(path.join(javaDir, 'BootReceiver.java'), bootReceiverContent);
+      console.log('✅ BootReceiver.java created successfully');
+
+      // ==================== BackgroundTickReceiver.java ====================
+      const backgroundTickContent = `package ${packageName};
+
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
+import android.os.PowerManager;
+import android.util.Log;
+
+import com.facebook.react.ReactApplication;
+import com.facebook.react.ReactInstanceManager;
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.ReactContext;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
+
+/**
+ * Periodic wake-up that pierces Doze. JS timers are frozen in Doze, so we use
+ * an AlarmManager alarm scheduled with setAndAllowWhileIdle (inexact — no
+ * SCHEDULE_EXACT_ALARM permission needed). On each fire we emit a
+ * "bleBackgroundTick" event to JS so the app can run a reconnect / health-check
+ * tick, then reschedule the next alarm (inexact while-idle alarms don't repeat).
+ */
+public class BackgroundTickReceiver extends BroadcastReceiver {
+    private static final String TAG = "BLEBackgroundTick";
+    private static final String EVENT_NAME = "bleBackgroundTick";
+    public static final String ACTION_TICK = "${packageName}.BACKGROUND_TICK";
+    private static final int REQUEST_CODE = 9100;
+    // Inexact cadence; the OS batches/relaxes this in Doze (~15 min floor).
+    private static final long INTERVAL_MS = 15 * 60 * 1000L;
+    // How long to hold a wake lock so JS has CPU to run the tick.
+    private static final long WAKE_LOCK_MS = 30 * 1000L;
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        Log.d(TAG, "Background tick fired");
+        PowerManager.WakeLock wakeLock = null;
+        try {
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "safewave:BackgroundTick");
+                wakeLock.acquire(WAKE_LOCK_MS);
+            }
+            emitTick(context);
+        } catch (Exception e) {
+            Log.e(TAG, "Error in background tick", e);
+        } finally {
+            // Always reschedule so the cadence continues, even if the emit failed.
+            schedule(context);
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+        }
+    }
+
+    private void emitTick(Context context) {
+        try {
+            ReactApplication reactApplication = (ReactApplication) context.getApplicationContext();
+            ReactInstanceManager reactInstanceManager =
+                reactApplication.getReactNativeHost().getReactInstanceManager();
+            ReactContext reactContext = reactInstanceManager.getCurrentReactContext();
+            if (reactContext != null) {
+                WritableMap params = Arguments.createMap();
+                params.putDouble("timestamp", System.currentTimeMillis());
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                    .emit(EVENT_NAME, params);
+                Log.d(TAG, "Background tick event sent to JS");
+            } else {
+                // RN context not up yet — the tick is best-effort, skip this round.
+                Log.w(TAG, "React context not available, skipping tick emit");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error emitting background tick", e);
+        }
+    }
+
+    private static PendingIntent buildPendingIntent(Context context) {
+        Intent intent = new Intent(context, BackgroundTickReceiver.class);
+        intent.setAction(ACTION_TICK);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        return PendingIntent.getBroadcast(context, REQUEST_CODE, intent, flags);
+    }
+
+    /** Schedule (or reschedule) the next inexact, Doze-piercing wake-up. */
+    public static void schedule(Context context) {
+        try {
+            AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+            if (am == null) {
+                return;
+            }
+            long triggerAt = System.currentTimeMillis() + INTERVAL_MS;
+            PendingIntent pi = buildPendingIntent(context);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                // Inexact but fires even in Doze; no SCHEDULE_EXACT_ALARM needed.
+                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+            } else {
+                am.set(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+            }
+            Log.d(TAG, "Next background tick scheduled in " + (INTERVAL_MS / 1000) + "s");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to schedule background tick", e);
+        }
+    }
+
+    /** Cancel any pending wake-up (on manual disconnect / logout). */
+    public static void cancel(Context context) {
+        try {
+            AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+            if (am != null) {
+                am.cancel(buildPendingIntent(context));
+                Log.d(TAG, "Background tick cancelled");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to cancel background tick", e);
+        }
+    }
+}
+`;
+
+      fs.writeFileSync(path.join(javaDir, 'BackgroundTickReceiver.java'), backgroundTickContent);
+      console.log('✅ BackgroundTickReceiver.java created successfully');
+
       return config;
     },
   ]);
@@ -408,6 +806,7 @@ function addToManifest(androidManifest) {
   const permissionsToAdd = [
     'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE',
     'android.permission.WAKE_LOCK',
+    'android.permission.RECEIVE_BOOT_COMPLETED',
   ];
 
   for (const perm of permissionsToAdd) {
@@ -447,6 +846,50 @@ function addToManifest(androidManifest) {
       },
     });
     console.log('✅ BLEForegroundService added to AndroidManifest');
+  }
+
+  // ---- Add boot receiver ----
+  if (!application.receiver) {
+    application.receiver = [];
+  }
+
+  const receiverExists = application.receiver.some(
+    (receiver) => receiver.$?.['android:name'] === '.BootReceiver'
+  );
+
+  if (!receiverExists) {
+    application.receiver.push({
+      $: {
+        'android:name': '.BootReceiver',
+        'android:enabled': 'true',
+        'android:exported': 'true',
+      },
+      'intent-filter': [
+        {
+          action: [
+            { $: { 'android:name': 'android.intent.action.BOOT_COMPLETED' } },
+            { $: { 'android:name': 'android.intent.action.QUICKBOOT_POWERON' } },
+          ],
+        },
+      ],
+    });
+    console.log('✅ BootReceiver added to AndroidManifest');
+  }
+
+  // ---- Add background-tick receiver (triggered by explicit PendingIntent) ----
+  const tickReceiverExists = application.receiver.some(
+    (receiver) => receiver.$?.['android:name'] === '.BackgroundTickReceiver'
+  );
+
+  if (!tickReceiverExists) {
+    application.receiver.push({
+      $: {
+        'android:name': '.BackgroundTickReceiver',
+        'android:enabled': 'true',
+        'android:exported': 'false',
+      },
+    });
+    console.log('✅ BackgroundTickReceiver added to AndroidManifest');
   }
 
   return androidManifest;

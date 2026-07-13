@@ -50,6 +50,13 @@ export const Collections = {
   BANDS: 'bands',
   ACTIVITY_LOGS: 'activity_logs',
   ORGANIZATIONS: 'organizations',
+  // Subcollection of users/{uid}: one doc per install, holding the FCM token
+  // the backend pushes alerts to.
+  DEVICES: 'devices',
+  // Admin-sent alerts. The backend writes here first and unconditionally, then
+  // pushes as a best-effort extra — so an alert still reaches an open app even
+  // when there's no usable push token.
+  NOTIFICATIONS: 'notifications',
 } as const;
 
 // Document IDs for global variables

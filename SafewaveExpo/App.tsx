@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity, Alert, AppState, AppStateStatus, Platform } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity, Alert, AppState, AppStateStatus, Platform, DeviceEventEmitter } from 'react-native';
 import { AuthNavigator } from './src/navigation/AuthNavigator';
 import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import { useAuthStore } from './src/store/authStore';
@@ -12,7 +12,19 @@ import { NotificationListenerService } from './src/services/NotificationListener
 import { ActivityLogService } from './src/services/ActivityLogService';
 import { AppPresenceService } from './src/services/AppPresenceService';
 import { BLEManager } from './src/services/bluetooth/BLEManager';
+import { PermissionsService } from './src/services/PermissionsService';
+import { PermissionsChecklistScreen } from './src/screens/permissions/PermissionsChecklistScreen';
+import { getMessaging, onMessage } from '@react-native-firebase/messaging';
+import { AlertService } from './src/services/alerts/AlertService';
+import { PushTokenService } from './src/services/alerts/PushTokenService';
+import { useAlertStore } from './src/store/alertStore';
+import { AlertAckModal } from './src/components/AlertAckModal';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, spacing } from './src/theme/colors';
+
+// One-time onboarding gate: after login on Android, show the background-access
+// checklist if any required grant is missing and the user hasn't dismissed it.
+const PERMISSIONS_ONBOARDED_KEY = '@safewave/permissions_onboarded';
 
 // Global error boundary to prevent white screen crashes in production
 class ErrorBoundary extends React.Component<
@@ -149,6 +161,8 @@ const EmailVerificationScreen = () => {
 const AppContent = () => {
   const { isAuthenticated, isLoading, user, initialize } = useAuthStore();
   const appState = useRef(AppState.currentState);
+  // null = still deciding, true = show the one-time permissions gate
+  const [showPermissionsGate, setShowPermissionsGate] = useState<boolean | null>(null);
 
   // Initialize auth state listener on mount
   useEffect(() => {
@@ -169,11 +183,52 @@ const AppContent = () => {
     };
   }, [isAuthenticated, user?.uid]);
 
+  // Register this device for pushed alerts, and handle ones that arrive while
+  // the app is in the foreground. The device doc lives under the user's uid, so
+  // this can only run once they're authenticated.
+  useEffect(() => {
+    if (!isAuthenticated || !user?.uid) {
+      PushTokenService.cleanup();
+      AlertService.cleanup();
+      return;
+    }
+
+    PushTokenService.initialize(user.uid).catch((error) => {
+      console.error('[App] PushTokenService.initialize failed:', error);
+    });
+
+    // Firestore listener: delivers alerts whenever the app is open, with no push
+    // token required. FCM (below) is the complementary channel that can also wake
+    // a closed app. Both dedupe into the same queue.
+    AlertService.initialize(user.uid);
+
+    // Surface any alert that arrived while the app was closed, and retry acks
+    // that were stranded by being offline.
+    useAlertStore.getState().hydrate().then(() => {
+      AlertService.buzzForCurrentAlert();
+    }).catch((error) => {
+      console.error('[App] Alert hydrate failed:', error);
+    });
+
+    const unsubscribe = onMessage(getMessaging(), (message) => {
+      AlertService.handleRemoteMessage(message).catch((error) => {
+        console.error('[App] Foreground alert handling failed:', error);
+      });
+    });
+
+    return () => {
+      unsubscribe();
+      PushTokenService.cleanup();
+      AlertService.cleanup();
+    };
+  }, [isAuthenticated, user?.uid]);
+
   // Initialize/cleanup NotificationListenerService for Android
   useEffect(() => {
     if (Platform.OS === 'android' && isAuthenticated && user?.uid) {
       NotificationListenerService.initialize(user.uid);
-      // The banners on Home and Alerts screens will guide users to enable permission
+      // The post-login Background Access checklist (and Account → Background Access)
+      // guide users to grant notification listener + battery/auto-start permissions.
     } else if (Platform.OS === 'android') {
       NotificationListenerService.cleanup();
     }
@@ -183,6 +238,22 @@ const AppContent = () => {
         NotificationListenerService.cleanup();
       }
     };
+  }, [isAuthenticated, user?.uid]);
+
+  // Listen for the native Doze-piercing wake-tick (Android only). The alarm
+  // fires even when JS timers are frozen; we run a reconnect/health-check tick.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !isAuthenticated || !user?.uid) {
+      return;
+    }
+
+    const subscription = DeviceEventEmitter.addListener('bleBackgroundTick', () => {
+      useBluetoothStore.getState().onBackgroundTick().catch((err) => {
+        console.error('[App] onBackgroundTick failed:', err);
+      });
+    });
+
+    return () => subscription.remove();
   }, [isAuthenticated, user?.uid]);
 
   // Initialize/cleanup AppPresenceService for real-time app status tracking
@@ -216,6 +287,13 @@ const AppContent = () => {
         nextAppState === 'active'
       ) {
         console.log('[App] App came to foreground');
+
+        // The OS can rotate the FCM token while the app is dead, in which case
+        // onTokenRefresh never fired and Firestore is holding a dead token.
+        PushTokenService.refresh().catch(() => {});
+        // Retry any acknowledgement that couldn't be sent while offline.
+        useAlertStore.getState().flushUnsentAcks().catch(() => {});
+
         // Read battery/firmware if stably connected (skipped during background reconnections).
         // Only fire when already connected — not when connecting/reconnecting, to avoid
         // racing with the connect flow's own reads.
@@ -248,6 +326,48 @@ const AppContent = () => {
     };
   }, [isAuthenticated]);
 
+  // Decide whether to show the one-time permissions gate after login (Android only).
+  useEffect(() => {
+    let cancelled = false;
+
+    if (Platform.OS !== 'android' || !isAuthenticated || !user?.uid) {
+      setShowPermissionsGate(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        const onboarded = await AsyncStorage.getItem(PERMISSIONS_ONBOARDED_KEY);
+        if (onboarded === 'true') {
+          if (!cancelled) setShowPermissionsGate(false);
+          return;
+        }
+        const status = await PermissionsService.getStatus();
+        const allGranted =
+          status.notifications &&
+          status.batteryOptimization &&
+          status.notificationListener;
+        if (!cancelled) setShowPermissionsGate(!allGranted);
+      } catch (error) {
+        console.error('[App] Failed to resolve permissions gate:', error);
+        if (!cancelled) setShowPermissionsGate(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, user?.uid]);
+
+  const dismissPermissionsGate = async () => {
+    try {
+      await AsyncStorage.setItem(PERMISSIONS_ONBOARDED_KEY, 'true');
+    } catch (error) {
+      console.error('[App] Failed to persist permissions onboarding flag:', error);
+    }
+    setShowPermissionsGate(false);
+  };
+
   // Show loading screen while checking auth state
   if (isLoading) {
     return <LoadingScreen />;
@@ -274,8 +394,25 @@ const AppContent = () => {
     return <AuthNavigator />;
   }
 
-  // Show main tab navigator for authenticated users
-  return <MainTabNavigator />;
+  // Wait until we've decided whether the permissions gate is needed, then show
+  // it once for authenticated Android users who are missing a required grant.
+  if (showPermissionsGate === null) {
+    return <LoadingScreen />;
+  }
+  if (showPermissionsGate) {
+    return <PermissionsChecklistScreen onComplete={dismissPermissionsGate} />;
+  }
+
+  // Show main tab navigator for authenticated users. AlertAckModal is mounted
+  // alongside it (not inside a screen) so a pushed alert surfaces wherever the
+  // user happens to be. RN <Modal> renders in its own native window, so it sits
+  // above the tab bar without any navigation plumbing.
+  return (
+    <>
+      <MainTabNavigator />
+      <AlertAckModal />
+    </>
+  );
 };
 
 export default function App() {

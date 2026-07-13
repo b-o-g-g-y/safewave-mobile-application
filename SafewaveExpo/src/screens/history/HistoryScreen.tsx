@@ -7,6 +7,10 @@ import {
   ImageBackground,
   RefreshControl,
   ActivityIndicator,
+  TouchableOpacity,
+  Modal,
+  TouchableWithoutFeedback,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +25,10 @@ interface HistoryItem {
   appName: string;
   bundleId: string;
   message: string;
+  title: string;
+  body: string;
+  filtered: boolean;
+  acknowledged: boolean;
   date: Date;
 }
 
@@ -36,6 +44,17 @@ const formatRelativeTime = (date: Date): string => {
   if (diffHours < 24) return `${diffHours}h ago`;
 
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+// Helper to format an absolute date/time for the detail view
+const formatFullDateTime = (date: Date): string => {
+  return date.toLocaleString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };
 
 // Helper to get date group label
@@ -76,6 +95,7 @@ export const HistoryScreen: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
 
   // Subscribe to history from Firebase
   useEffect(() => {
@@ -93,6 +113,10 @@ export const HistoryScreen: React.FC = () => {
         appName: doc.appName,
         bundleId: doc.bundleIdentifier,
         message: doc.message,
+        title: doc.title ?? '',
+        body: doc.body ?? '',
+        filtered: doc.filtered === true,
+        acknowledged: doc.acknowledged === true,
         date: doc.date ? doc.date.toDate() : new Date(),
       }));
       setHistory(items);
@@ -132,6 +156,10 @@ export const HistoryScreen: React.FC = () => {
         appName: doc.appName,
         bundleId: doc.bundleIdentifier,
         message: doc.message,
+        title: doc.title ?? '',
+        body: doc.body ?? '',
+        filtered: doc.filtered === true,
+        acknowledged: doc.acknowledged === true,
         date: doc.date ? doc.date.toDate() : new Date(),
       }));
       setHistory(items);
@@ -142,22 +170,49 @@ export const HistoryScreen: React.FC = () => {
     }
   };
 
-  const renderHistoryItem = (item: HistoryItem) => (
-    <View style={styles.historyItem}>
-      <View style={[styles.appAvatar, { backgroundColor: getAppColor(item.bundleId) }]}>
-        <Text style={styles.appAvatarText}>{getInitial(item.appName)}</Text>
-      </View>
-      <View style={styles.historyContent}>
-        <View style={styles.historyHeader}>
-          <Text style={styles.appName}>{item.appName}</Text>
-          <Text style={styles.timestamp}>{formatRelativeTime(item.date)}</Text>
+  const renderHistoryItem = (item: HistoryItem) => {
+    const hasBody = item.body.length > 0;
+    return (
+      <TouchableOpacity
+        style={styles.historyItem}
+        onPress={() => setSelectedItem(item)}
+        activeOpacity={0.7}
+      >
+        <View style={[styles.appAvatar, { backgroundColor: getAppColor(item.bundleId) }]}>
+          <Text style={styles.appAvatarText}>{getInitial(item.appName)}</Text>
         </View>
-        <Text style={styles.message} numberOfLines={2}>
-          {item.message}
-        </Text>
-      </View>
-    </View>
-  );
+        <View style={styles.historyContent}>
+          <View style={styles.historyHeader}>
+            <Text style={styles.appName}>{item.appName}</Text>
+            <Text style={styles.timestamp}>{formatRelativeTime(item.date)}</Text>
+          </View>
+          <Text style={styles.message} numberOfLines={1}>
+            {item.message}
+          </Text>
+          {hasBody && (
+            <Text style={styles.bodyPreview} numberOfLines={2}>
+              {item.body}
+            </Text>
+          )}
+          {item.filtered && (
+            <View style={styles.filteredBadge}>
+              <Ionicons name="notifications-off-outline" size={12} color={colors.textMuted} />
+              <Text style={styles.filteredBadgeText}>Filtered (no buzz)</Text>
+            </View>
+          )}
+          {!item.filtered && item.acknowledged && (
+            <View style={styles.filteredBadge}>
+              <Ionicons name="checkmark-circle" size={12} color={colors.accent} />
+              <Text style={[styles.filteredBadgeText, { color: colors.accent }]}>
+                Acknowledged
+              </Text>
+            </View>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.textMuted} style={styles.chevron} />
+      </TouchableOpacity>
+    );
+  };
 
   const renderSectionHeader = (title: string) => (
     <View style={styles.sectionHeader}>
@@ -235,6 +290,121 @@ export const HistoryScreen: React.FC = () => {
           )}
         </View>
       </SafeAreaView>
+
+      {/* Notification detail */}
+      <Modal
+        visible={selectedItem !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSelectedItem(null)}
+      >
+        <TouchableWithoutFeedback onPress={() => setSelectedItem(null)}>
+          <View style={styles.detailOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.detailContent}>
+                <SafeAreaView edges={['bottom']}>
+                  <View style={styles.detailHandle} />
+
+                  {selectedItem && (
+                    <>
+                      {/* App header */}
+                      <View style={styles.detailAppRow}>
+                        <View
+                          style={[
+                            styles.appAvatar,
+                            { backgroundColor: getAppColor(selectedItem.bundleId) },
+                          ]}
+                        >
+                          <Text style={styles.appAvatarText}>
+                            {getInitial(selectedItem.appName)}
+                          </Text>
+                        </View>
+                        <View style={styles.detailAppInfo}>
+                          <Text style={styles.detailAppName}>{selectedItem.appName}</Text>
+                          <Text style={styles.detailTime}>
+                            {formatFullDateTime(selectedItem.date)}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => setSelectedItem(null)}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Ionicons name="close" size={24} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Status pill. Acknowledged wins over "Band vibrated":
+                          a press implies the buzz happened and was answered. */}
+                      {(() => {
+                        const status = selectedItem.filtered
+                          ? {
+                              pill: styles.statusPillFiltered,
+                              icon: 'notifications-off-outline' as const,
+                              color: colors.textMuted,
+                              label: 'Filtered — band did not vibrate',
+                            }
+                          : selectedItem.acknowledged
+                            ? {
+                                pill: styles.statusPillAcknowledged,
+                                icon: 'checkmark-circle' as const,
+                                color: colors.accent,
+                                label: 'Acknowledged on band',
+                              }
+                            : {
+                                pill: styles.statusPillBuzzed,
+                                icon: 'pulse' as const,
+                                color: colors.accent,
+                                label: 'Band vibrated',
+                              };
+
+                        return (
+                          <View style={[styles.statusPill, status.pill]}>
+                            <Ionicons name={status.icon} size={14} color={status.color} />
+                            <Text style={[styles.statusPillText, { color: status.color }]}>
+                              {status.label}
+                            </Text>
+                          </View>
+                        );
+                      })()}
+
+                      {/* Content */}
+                      <ScrollView
+                        style={styles.detailScroll}
+                        contentContainerStyle={styles.detailScrollContent}
+                        showsVerticalScrollIndicator={false}
+                      >
+                        <Text style={styles.detailTitle}>
+                          {selectedItem.title || selectedItem.message}
+                        </Text>
+                        {selectedItem.body.length > 0 ? (
+                          <Text style={styles.detailBody}>{selectedItem.body}</Text>
+                        ) : (
+                          <Text style={styles.detailNoBody}>
+                            No additional details were captured for this notification.
+                          </Text>
+                        )}
+
+                        {selectedItem.acknowledged && (
+                          <View style={styles.ackRow}>
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={16}
+                              color={colors.accent}
+                            />
+                            <Text style={styles.ackText}>
+                              You acknowledged this alert by pressing the button on your band.
+                            </Text>
+                          </View>
+                        )}
+                      </ScrollView>
+                    </>
+                  )}
+                </SafeAreaView>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </ImageBackground>
   );
 };
@@ -331,8 +501,30 @@ const styles = StyleSheet.create({
   },
   message: {
     fontSize: 14,
-    color: colors.textSecondary,
+    fontWeight: '500',
+    color: colors.textPrimary,
     lineHeight: 20,
+  },
+  bodyPreview: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  chevron: {
+    alignSelf: 'center',
+    marginLeft: spacing.xs,
+  },
+  filteredBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+  },
+  filteredBadgeText: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginLeft: 4,
+    fontStyle: 'italic',
   },
   emptyState: {
     alignItems: 'center',
@@ -349,6 +541,105 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textSecondary,
     textAlign: 'center',
+    lineHeight: 20,
+  },
+  detailOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  detailContent: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: borderRadius.xl,
+    borderTopRightRadius: borderRadius.xl,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+    maxHeight: '80%',
+  },
+  detailHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: colors.textMuted,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  detailAppRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
+  detailAppInfo: {
+    flex: 1,
+    marginLeft: spacing.md,
+  },
+  detailAppName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  detailTime: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: borderRadius.round,
+    marginBottom: spacing.md,
+  },
+  statusPillBuzzed: {
+    backgroundColor: `${colors.accent}20`,
+  },
+  statusPillFiltered: {
+    backgroundColor: colors.surfaceLight,
+  },
+  statusPillAcknowledged: {
+    backgroundColor: `${colors.accent}20`,
+  },
+  ackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+  ackText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  statusPillText: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  detailScroll: {
+    flexShrink: 1,
+  },
+  detailScrollContent: {
+    paddingBottom: spacing.sm,
+  },
+  detailTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+    lineHeight: 22,
+  },
+  detailBody: {
+    fontSize: 15,
+    color: colors.textSecondary,
+    lineHeight: 22,
+  },
+  detailNoBody: {
+    fontSize: 14,
+    color: colors.textMuted,
+    fontStyle: 'italic',
     lineHeight: 20,
   },
 });

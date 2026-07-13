@@ -2,7 +2,7 @@ import { NativeEventEmitter, NativeModules, Platform, Linking } from 'react-nati
 import { useBluetoothStore } from '../store/bluetoothStore';
 import { FirestoreService } from './firebase/FirestoreService';
 import { ApplicationDocument } from '../types/user';
-import { VibrationCommand } from '../types/bluetooth';
+import { VibrationCommand, resolveLiveNumBuzzes } from '../types/bluetooth';
 
 /**
  * Android Notification Listener Service
@@ -11,6 +11,9 @@ import { VibrationCommand } from '../types/bluetooth';
 
 interface NotificationEvent {
   packageName: string;
+  title: string;
+  text: string;
+  bigText: string;
   timestamp: number;
 }
 
@@ -157,7 +160,7 @@ class AndroidNotificationListenerService {
       return;
     }
 
-    const { packageName, timestamp } = event;
+    const { packageName, title = '', text = '', bigText = '', timestamp } = event;
     const trimmedPackageName = packageName.trim();
 
     if (!trimmedPackageName) {
@@ -167,22 +170,25 @@ class AndroidNotificationListenerService {
 
     console.log('[NotificationListener] Notification received:', trimmedPackageName);
 
-    // Deduplication: check if we recently processed this notification
+    // Deduplication: check if we recently processed this notification.
+    // Key on content (not just package) so distinct notifications from the same
+    // app within the window aren't swallowed, while exact re-posts still are.
     const now = Date.now();
-    const lastProcessed = this.recentNotifications.get(trimmedPackageName);
-    
+    const dedupKey = `${trimmedPackageName}|${title.trim()}|${text.trim()}`;
+    const lastProcessed = this.recentNotifications.get(dedupKey);
+
     if (lastProcessed && (now - lastProcessed) < this.DEDUP_WINDOW_MS) {
       console.log('[NotificationListener] Duplicate notification ignored (within dedup window):', trimmedPackageName);
       return;
     }
-    
+
     // Update the last processed timestamp
-    this.recentNotifications.set(trimmedPackageName, now);
-    
+    this.recentNotifications.set(dedupKey, now);
+
     // Clean up old entries from the deduplication map (older than 5 seconds)
-    for (const [pkg, time] of this.recentNotifications.entries()) {
+    for (const [key, time] of this.recentNotifications.entries()) {
       if (now - time > 5000) {
-        this.recentNotifications.delete(pkg);
+        this.recentNotifications.delete(key);
       }
     }
 
@@ -202,31 +208,46 @@ class AndroidNotificationListenerService {
 
       console.log('[NotificationListener] Processing notification for:', app.name);
 
-      // Get the Bluetooth store
-      const bluetoothStore = useBluetoothStore.getState();
+      const notificationTitle = title.trim();
+      // Prefer the expanded body text when present; it carries the fuller message.
+      const notificationBody = (bigText.trim() || text.trim());
 
-      // Check if band is connected
-      if (bluetoothStore.connectionState !== 'connected') {
-        console.log('[NotificationListener] Band not connected, skipping vibration');
-        // Still save to history
-        await this.saveToHistory(app, trimmedPackageName);
+      // Decide whether this notification's content passes the phrase filter.
+      const shouldBuzz = this.matchesPhrases(app, title, text, bigText);
+
+      if (!shouldBuzz) {
+        // Notification is suppressed by the user's phrase rules. Record it (so
+        // history stays a complete log) but never vibrate.
+        console.log('[NotificationListener] Notification filtered out by phrase rules:', app.name);
+        await this.saveToHistory(app, trimmedPackageName, true, notificationTitle, notificationBody);
         return;
       }
 
-      // Create vibration command from app config
+      // Create vibration command from app config.
+      // This path is Android-only (notifications are intercepted in-app), and
+      // the Android firmware does not understand numBuzzes=0 as continuous, so
+      // map continuous mode to a large finite count.
       const vibrationCommand: VibrationCommand = {
         strength: app.config.strength,
-        numBuzzes: app.config.numberOfVibrations,
+        numBuzzes: resolveLiveNumBuzzes(app.config.numberOfVibrations, 'android'),
         dutyOfBuzz: 50, // Default duty cycle
         durationOfDelay: 50, // Default delay between buzzes
       };
 
-      // Send vibration to band
+      // Always attempt the buzz. The store's vibrate() is self-healing: if the
+      // BLE link dropped (e.g. in Doze), it reconnects and retries within a
+      // bounded window, then gives up quietly. We don't gate on connectionState
+      // here — doing so was the bug where a Doze-dropped link silently skipped
+      // the buzz even though the notification was received.
       console.log('[NotificationListener] Sending vibration:', vibrationCommand);
-      await bluetoothStore.vibrate(vibrationCommand);
+      try {
+        await useBluetoothStore.getState().vibrate(vibrationCommand);
+      } catch (vibrateError) {
+        console.log('[NotificationListener] Vibration failed (logging anyway):', vibrateError);
+      }
 
-      // Save to history
-      await this.saveToHistory(app, trimmedPackageName);
+      // Save to history regardless of whether the buzz landed.
+      await this.saveToHistory(app, trimmedPackageName, false, notificationTitle, notificationBody);
 
       console.log('[NotificationListener] Notification processed successfully');
     } catch (error) {
@@ -235,9 +256,42 @@ class AndroidNotificationListenerService {
   }
 
   /**
-   * Save notification to history
+   * Decide whether a notification's content passes the app's phrase filter.
+   * Returns true (vibrate) when no phrases are configured, preserving the
+   * original "vibrate for every notification" behavior.
    */
-  private async saveToHistory(app: ApplicationDocument, packageName: string): Promise<void> {
+  private matchesPhrases(
+    app: ApplicationDocument,
+    title: string,
+    text: string,
+    bigText: string
+  ): boolean {
+    const phrases = app.config.phrases;
+    if (!phrases || phrases.length === 0) {
+      return true;
+    }
+
+    const haystack = `${title} ${text} ${bigText}`.toLowerCase();
+    const matched = phrases.some((phrase) => {
+      const needle = phrase.trim().toLowerCase();
+      return needle.length > 0 && haystack.includes(needle);
+    });
+
+    const mode = app.config.phraseMode ?? 'allow';
+    return mode === 'block' ? !matched : matched;
+  }
+
+  /**
+   * Save notification to history.
+   * `filtered` marks records that were suppressed by phrase rules (no vibration).
+   */
+  private async saveToHistory(
+    app: ApplicationDocument,
+    packageName: string,
+    filtered: boolean,
+    title?: string,
+    body?: string
+  ): Promise<void> {
     if (!this.userId) return;
 
     try {
@@ -245,9 +299,15 @@ class AndroidNotificationListenerService {
         appName: app.name,
         bundleIdentifier: packageName,
         userId: this.userId,
-        message: `Notification from ${app.name}`,
+        message: title && title.length > 0 ? title : `Notification from ${app.name}`,
+        // Store the raw title/body when captured so History can show details.
+        // Only write keys when non-empty (Firestore rejects undefined).
+        ...(title && title.length > 0 ? { title } : {}),
+        ...(body && body.length > 0 ? { body } : {}),
+        // Only write the flag when true so existing/non-filtered records stay clean.
+        ...(filtered ? { filtered: true } : {}),
       });
-      console.log('[NotificationListener] History record created');
+      console.log('[NotificationListener] History record created', filtered ? '(filtered)' : '');
     } catch (error) {
       console.error('[NotificationListener] Error saving to history:', error);
     }

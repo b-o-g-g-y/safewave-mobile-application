@@ -15,6 +15,7 @@ import { colors, spacing, borderRadius } from '../theme/colors';
 import { useBluetoothStore } from '../store/bluetoothStore';
 import { useAuthStore } from '../store/authStore';
 import { FirestoreService } from '../services/firebase/FirestoreService';
+import { formatFirmwareVersion } from '../utils/firmwareVersion';
 
 interface BandInfoModalProps {
   visible: boolean;
@@ -200,7 +201,7 @@ export const BandInfoModal: React.FC<BandInfoModalProps> = ({
               <Ionicons name="hardware-chip-outline" size={24} color={colors.accent} />
               <Text style={styles.infoLabel}>Firmware</Text>
               <Text style={styles.infoValue}>
-                {firmwareVersion || 'Unknown'}
+                {formatFirmwareVersion(firmwareVersion) || 'Unknown'}
               </Text>
             </View>
 

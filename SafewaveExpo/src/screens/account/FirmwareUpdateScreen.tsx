@@ -19,7 +19,7 @@ import {
   FirmwareManifest,
 } from '../../services/firmware/FirmwareRepository';
 import { OTAPhaseLabel } from '../../types/bluetooth';
-import { compareFirmwareVersions } from '../../utils/firmwareVersion';
+import { compareFirmwareVersions, formatFirmwareVersion } from '../../utils/firmwareVersion';
 
 const PHASE_LABEL: Record<OTAPhaseLabel, string> = {
   preparing: 'Preparing…',
@@ -200,13 +200,15 @@ export const FirmwareUpdateScreen: React.FC = () => {
             <View style={styles.row}>
               <Ionicons name="git-branch-outline" size={22} color={colors.textPrimary} />
               <Text style={styles.rowLabel}>Current version</Text>
-              <Text style={styles.rowValue}>{firmwareVersion || '—'}</Text>
+              <Text style={styles.rowValue}>{formatFirmwareVersion(firmwareVersion) || '—'}</Text>
             </View>
             <View style={[styles.row, styles.rowLast]}>
               <Ionicons name="cloud-download-outline" size={22} color={colors.textPrimary} />
               <Text style={styles.rowLabel}>Latest version</Text>
               <Text style={styles.rowValue}>
-                {isChecking ? 'Checking…' : manifest?.version || '—'}
+                {isChecking
+                  ? 'Checking…'
+                  : formatFirmwareVersion(manifest?.version) || '—'}
               </Text>
             </View>
           </View>

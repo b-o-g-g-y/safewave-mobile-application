@@ -1,6 +1,14 @@
 import { Platform, PermissionsAndroid, AppState } from 'react-native';
-import { BleManager, Device, State, BleError, ConnectionPriority } from 'react-native-ble-plx';
+import {
+  BleManager,
+  Device,
+  State,
+  BleError,
+  ConnectionPriority,
+  Characteristic,
+} from 'react-native-ble-plx';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import {
   BLEDevice,
   VibrationCommand,
@@ -18,6 +26,12 @@ import {
   DISPLAY_NAME_CHAR_UUID,
   FIRMWARE_VERSION_CHAR_UUID,
   APP_SETTINGS_CHAR_UUID,
+  BUTTON_ACK_CHAR_UUID,
+  BUTTON_ACK_SERVICE_UUID,
+  OTA_CHAR_0_UUID,
+  OTA_CHAR_1_UUID,
+  OTA_CHAR_2_UUID,
+  OTA_CHAR_3_UUID,
   SCAN_SERVICE_UUIDS,
   SCAN_TIMEOUT_MS,
   STORAGE_KEY_LAST_DEVICE,
@@ -100,6 +114,47 @@ let batterySubscription: { remove: () => void } | null = null;
 // Notification subscription reference
 let notificationSubscription: { remove: () => void } | null = null;
 
+// Button-ack subscription reference (band -> app, physical button press)
+let buttonAckSubscription: { remove: () => void } | null = null;
+
+/**
+ * UUIDs already accounted for in BLEConstants. Anything the GATT dump finds
+ * outside this set is flagged UNKNOWN, which is how we spot the new
+ * button-ack characteristic added to the band firmware.
+ */
+const KNOWN_UUIDS = new Set(
+  [
+    MAIN_SERVICE_UUID,
+    HID_SERVICE_UUID,
+    BATTERY_SERVICE_UUID,
+    DEVICE_INFO_SERVICE_UUID,
+    OTA_SERVICE_UUID,
+    VIBRATION_CHAR_UUID,
+    BATTERY_CHAR_UUID,
+    DISPLAY_NAME_CHAR_UUID,
+    FIRMWARE_VERSION_CHAR_UUID,
+    APP_SETTINGS_CHAR_UUID,
+    OTA_CHAR_0_UUID,
+    OTA_CHAR_1_UUID,
+    OTA_CHAR_2_UUID,
+    OTA_CHAR_3_UUID,
+    ...(BUTTON_ACK_CHAR_UUID ? [BUTTON_ACK_CHAR_UUID] : []),
+  ].map((uuid) => uuid.toLowerCase())
+);
+
+/**
+ * Describe a characteristic's properties compactly, e.g. "READ NOTIFY".
+ */
+const describeProperties = (characteristic: Characteristic): string => {
+  const props: string[] = [];
+  if (characteristic.isReadable) props.push('READ');
+  if (characteristic.isWritableWithResponse) props.push('WRITE');
+  if (characteristic.isWritableWithoutResponse) props.push('WRITE_NO_RESP');
+  if (characteristic.isNotifiable) props.push('NOTIFY');
+  if (characteristic.isIndicatable) props.push('INDICATE');
+  return props.length ? props.join(' ') : 'NONE';
+};
+
 // Scan timeout reference
 let scanTimeoutId: NodeJS.Timeout | null = null;
 
@@ -150,8 +205,10 @@ const retryBleOperation = async <T>(
 const getBleManager = (): BleManager => {
   if (!bleManagerInstance) {
     if (Platform.OS === 'ios') {
+      const bundleId =
+        Constants.expoConfig?.ios?.bundleIdentifier ?? 'com.safewave.unknown';
       bleManagerInstance = new BleManager({
-        restoreStateIdentifier: 'com.safewave.ble.restore',
+        restoreStateIdentifier: `${bundleId}.ble.restore`,
         restoreStateFunction: (restoredState) => {
           if (restoredState?.connectedPeripherals?.length) {
             console.log(
@@ -438,9 +495,15 @@ export const BLEManager = {
    */
   connect: async (
     deviceId: string,
-    onBatteryUpdate?: (status: BatteryStatus) => void
+    onBatteryUpdate?: (status: BatteryStatus) => void,
+    opts?: { autoConnect?: boolean }
   ): Promise<BLEDevice> => {
     const manager = getBleManager();
+    // autoConnect:true hands reconnection to the Android GATT stack, which runs
+    // below the JS layer and survives Doze (the OS re-links when the band is back
+    // in range). Used for background reconnects; the initial user-initiated
+    // connect stays autoConnect:false for a fast, deterministic first connect.
+    const useAutoConnect = opts?.autoConnect ?? false;
 
     // Stop scanning if active
     BLEManager.stopScan();
@@ -474,16 +537,26 @@ export const BLEManager = {
         device = alreadyConnected;
       } else {
         try {
+          if (useAutoConnect) {
+            // OS-managed background reconnect: NO timeout and NO Promise.race —
+            // a race rejection would cancel the OS's indefinite reconnect. The
+            // promise resolves whenever the band comes back into range.
+            console.log('[BLE] Connecting with autoConnect:true (background reconnect)');
+            device = await manager.connectToDevice(deviceId, {
+              autoConnect: true,
+            });
+          } else {
           // Wrap connection in timeout handler to catch library-level timeout errors
           device = await Promise.race([
             manager.connectToDevice(deviceId, {
               autoConnect: false,
               timeout: 15000, // Increased timeout to 15 seconds
             }),
-            new Promise<Device>((_, reject) => 
+            new Promise<Device>((_, reject) =>
               setTimeout(() => reject(new Error('Connection timeout - device did not respond in time')), 15000)
             )
           ]);
+          }
         } catch (connectionError: any) {
           // Handle specific error cases
           const errorMessage = connectionError?.message || '';
@@ -582,6 +655,10 @@ export const BLEManager = {
       connectedDevice = device;
       connectionGeneration += 1;
 
+      // Discovery aid: log the band's full GATT table so newly added firmware
+      // characteristics (e.g. the button-ack char) can be identified.
+      await BLEManager.dumpGattTable();
+
       // Subscribe to battery updates (with retry in case pairing is still settling)
       if (onBatteryUpdate) {
         try {
@@ -627,8 +704,18 @@ export const BLEManager = {
 
       return mapDevice(device);
     } catch (error: any) {
+      // Surface the underlying failure before it is replaced by the
+      // user-facing message, otherwise the real cause is unrecoverable.
+      console.log('[BLE] connect() raw failure:', {
+        message: error?.message,
+        errorCode: error?.errorCode,
+        reason: error?.reason,
+        iosErrorCode: error?.iosErrorCode,
+        androidErrorCode: error?.androidErrorCode,
+      });
+
       // If the error is already a user-friendly message, rethrow it
-      if (error.message && 
+      if (error.message &&
           (error.message.includes('timeout') ||
            error.message.includes('not found') ||
            error.message.includes('permission') ||
@@ -636,7 +723,7 @@ export const BLEManager = {
            error.message.includes('compatible'))) {
         throw error;
       }
-      
+
       // Otherwise, provide a generic error message
       throw new Error('Failed to connect to device - please try again.');
     }
@@ -667,6 +754,16 @@ export const BLEManager = {
           console.log('[BLE] Notification subscription cleanup during disconnect');
         }
         notificationSubscription = null;
+      }
+
+      // Remove button-ack subscription with error handling
+      if (buttonAckSubscription) {
+        try {
+          buttonAckSubscription.remove();
+        } catch (error) {
+          console.log('[BLE] Button-ack subscription cleanup during disconnect');
+        }
+        buttonAckSubscription = null;
       }
 
       // Disconnect
@@ -898,6 +995,139 @@ export const BLEManager = {
   },
 
   /**
+   * Log every service and characteristic exposed by the connected band, marking
+   * any UUID not present in BLEConstants as UNKNOWN. Discovery aid for locating
+   * newly added firmware characteristics — must run after
+   * discoverAllServicesAndCharacteristics().
+   */
+  dumpGattTable: async (): Promise<void> => {
+    const device = connectedDevice;
+    if (!device) {
+      console.log('[BLE] dumpGattTable: no device connected');
+      return;
+    }
+
+    try {
+      const services = await device.services();
+      console.log('[BLE] ================ GATT TABLE DUMP ================');
+      console.log('[BLE] Device:', device.name || device.localName, device.id);
+      console.log('[BLE] Services:', services.length);
+
+      for (const service of services) {
+        const serviceKnown = KNOWN_UUIDS.has(service.uuid.toLowerCase());
+        console.log(
+          `[BLE] SERVICE ${service.uuid} ${serviceKnown ? '' : '<-- UNKNOWN SERVICE'}`
+        );
+
+        let characteristics: Characteristic[] = [];
+        try {
+          characteristics = await service.characteristics();
+        } catch (charError: any) {
+          console.log('[BLE]   (failed to read characteristics:', charError?.message || charError, ')');
+          continue;
+        }
+
+        for (const characteristic of characteristics) {
+          const charKnown = KNOWN_UUIDS.has(characteristic.uuid.toLowerCase());
+          console.log(
+            `[BLE]   CHAR ${characteristic.uuid} [${describeProperties(characteristic)}]` +
+              `${charKnown ? '' : '  <-- UNKNOWN CHARACTERISTIC'}`
+          );
+        }
+      }
+
+      console.log('[BLE] ================================================');
+      console.log(
+        '[BLE] Look for an UNKNOWN characteristic with NOTIFY — that is the button-ack char.'
+      );
+      console.log('[BLE] Put its UUID in BUTTON_ACK_CHAR_UUID in BLEConstants.ts');
+    } catch (error: any) {
+      console.error('[BLE] dumpGattTable failed:', error?.message || error);
+    }
+  },
+
+  /**
+   * Subscribe to the band's button-ack characteristic. The band notifies on
+   * this when the user presses the physical button.
+   *
+   * No-op until BUTTON_ACK_CHAR_UUID is filled in from the GATT dump.
+   */
+  subscribeToButtonAck: (callback: (bytes: number[]) => void): void => {
+    if (!BUTTON_ACK_CHAR_UUID) {
+      console.log(
+        '[BLE] subscribeToButtonAck skipped: BUTTON_ACK_CHAR_UUID not set yet. ' +
+          'Read the GATT TABLE DUMP log and fill it in.'
+      );
+      return;
+    }
+
+    const device = connectedDevice;
+    if (!device) return;
+
+    if (buttonAckSubscription) {
+      try {
+        buttonAckSubscription.remove();
+      } catch (error) {
+        console.log('[BLE] Button-ack subscription removal completed');
+      }
+      buttonAckSubscription = null;
+    }
+
+    console.log('[BLE] Subscribing to button-ack on', BUTTON_ACK_CHAR_UUID);
+
+    buttonAckSubscription = device.monitorCharacteristicForService(
+      BUTTON_ACK_SERVICE_UUID,
+      BUTTON_ACK_CHAR_UUID,
+      (error, characteristic) => {
+        if (error) {
+          const errorMessage = error.message || '';
+          const isDisconnectionError =
+            errorMessage.includes('disconnected') ||
+            errorMessage.includes('cancelled') ||
+            errorMessage.includes('powered off') ||
+            errorMessage.includes('notify change failed') ||
+            error.errorCode === 201 ||
+            error.errorCode === 2;
+
+          if (!isDisconnectionError) {
+            console.error('[BLE] Button-ack subscription error:', error);
+          }
+          if (subscriptionErrorCallback) {
+            subscriptionErrorCallback();
+          }
+          return;
+        }
+
+        if (characteristic?.value) {
+          const bytes = base64ToBytes(characteristic.value);
+          console.log('[BLE] ========== BUTTON ACK RECEIVED ==========');
+          console.log('[BLE] Raw bytes:', bytes);
+          console.log('[BLE] Base64:', characteristic.value);
+          console.log('[BLE] =========================================');
+          callback(bytes);
+        }
+      }
+    );
+
+    console.log('[BLE] Button-ack subscription active');
+  },
+
+  /**
+   * Unsubscribe from the button-ack characteristic
+   */
+  unsubscribeFromButtonAck: (): void => {
+    if (buttonAckSubscription) {
+      try {
+        buttonAckSubscription.remove();
+      } catch (error) {
+        console.log('[BLE] Button-ack subscription cleanup completed');
+      }
+      buttonAckSubscription = null;
+      console.log('[BLE] Button-ack subscription removed');
+    }
+  },
+
+  /**
    * Unsubscribe from notifications
    */
   unsubscribeFromNotifications: (): void => {
@@ -1055,10 +1285,15 @@ export const BLEManager = {
     }
 
     try {
-      // Convert command to byte array
+      // Convert command to byte array.
+      // numBuzzes of 0 is intentional: on firmware that supports it, the band
+      // treats it as "vibrate continuously until the physical button is
+      // pressed", so allow 0 through. The upper bound is the single-byte max
+      // (255) rather than 10, so the large count used to emulate continuous
+      // mode on Android (ANDROID_CONTINUOUS_NUM_BUZZES) isn't truncated.
       const data = [
         Math.min(100, Math.max(0, command.strength)),
-        Math.min(10, Math.max(1, command.numBuzzes)),
+        Math.min(255, Math.max(0, command.numBuzzes)),
         Math.min(100, Math.max(10, command.dutyOfBuzz)),
         Math.min(100, Math.max(10, command.durationOfDelay)),
       ];
@@ -1119,8 +1354,13 @@ export const BLEManager = {
       if (characteristic?.value) {
         const bytes = base64ToBytes(characteristic.value);
         if (bytes.length >= 6) {
-          // Parse firmware version as dotted 4-part: data[2].data[3].data[4].data[5]
-          const version = `${bytes[2]}.${bytes[3]}.${bytes[4]}.${bytes[5]}`;
+          // Bytes 2..5 are firmware APP_VERSION, big-endian (0x1043 -> "4163")
+          const version = String(
+            ((bytes[2] << 24) >>> 0) +
+              (bytes[3] << 16) +
+              (bytes[4] << 8) +
+              bytes[5]
+          );
           console.log('[BLE] Firmware version read:', version);
           return version;
         } else if (bytes.length > 0) {
@@ -1302,6 +1542,10 @@ export const BLEManager = {
             try { notificationSubscription.remove(); } catch (_) {}
             notificationSubscription = null;
           }
+          if (buttonAckSubscription) {
+            try { buttonAckSubscription.remove(); } catch (_) {}
+            buttonAckSubscription = null;
+          }
 
           connectedDevice = null;
           callback(device ? mapDevice(device) : cachedDevice);
@@ -1347,6 +1591,11 @@ export const BLEManager = {
     if (notificationSubscription) {
       notificationSubscription.remove();
       notificationSubscription = null;
+    }
+
+    if (buttonAckSubscription) {
+      buttonAckSubscription.remove();
+      buttonAckSubscription = null;
     }
 
     if (scanTimeoutId) {
