@@ -63,6 +63,20 @@ export const DISPLAY_NAME_CHAR_UUID = '543eff2a-751b-11ed-a1eb-0242ac120002';
  */
 export const FIRMWARE_VERSION_CHAR_UUID = '47cd799a-8233-11ed-a1eb-0242ac120002';
 
+/**
+ * Button Ack characteristic — the band notifies on this when the user presses
+ * the physical button.
+ * Properties: Read, Notify
+ * Payload format: not yet known; subscribeToButtonAck logs the raw bytes.
+ */
+export const BUTTON_ACK_CHAR_UUID: string | null =
+  '47cd7a01-8233-11ed-a1eb-0242ac120002';
+
+/**
+ * Service the button-ack characteristic lives on (the main Safewave service).
+ */
+export const BUTTON_ACK_SERVICE_UUID = MAIN_SERVICE_UUID;
+
 // ==================== OTA UPDATE SERVICE UUIDs ====================
 
 /**

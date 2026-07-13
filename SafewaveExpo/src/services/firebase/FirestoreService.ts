@@ -32,6 +32,7 @@ import {
   ActivityLogType,
   ActivityLogMetadata,
   DevicePlatform,
+  NotificationDocument,
   OrganizationDocument,
 } from '../../types/user';
 import { Collections, GlobalDocuments } from './config';
@@ -104,6 +105,68 @@ export const FirestoreService = {
     await updateDoc(doc(db(), Collections.USERS, userId), {
       lastOnline: serverTimestamp(),
     });
+  },
+
+  // ==================== PUSH DEVICE OPERATIONS ====================
+
+  /**
+   * Register this install's FCM token so the backend can push alerts to it.
+   *
+   * Keyed by a stable per-install deviceId (not the token) so a token refresh
+   * updates the existing doc rather than leaving an orphan behind. merge:true
+   * so a refresh doesn't clobber fields the backend may have added.
+   */
+  upsertDevice: async (
+    userId: string,
+    deviceId: string,
+    fcmToken: string
+  ): Promise<void> => {
+    await setDoc(
+      doc(db(), Collections.USERS, userId, Collections.DEVICES, deviceId),
+      {
+        fcmToken,
+        platform: Platform.OS as DevicePlatform,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  },
+
+  /**
+   * Subscribe to admin alerts targeted at this user.
+   *
+   * This is the delivery channel that needs no push token: the backend writes
+   * the notification doc unconditionally, so an open app always receives it.
+   * FCM is the additional channel that can also wake a closed app.
+   *
+   * The targetUserId filter is REQUIRED, not an optimisation. Security rules
+   * are evaluated per document, so an unfiltered query is rejected outright —
+   * which is what stops one user reading another's alerts.
+   */
+  subscribeToNotifications: (
+    userId: string,
+    callback: (notifications: NotificationDocument[]) => void
+  ): (() => void) => {
+    const q = query(
+      collection(db(), Collections.NOTIFICATIONS),
+      where('targetUserId', '==', userId)
+    );
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const notifications = snapshot.docs.map(
+          (d: FirebaseFirestoreTypes.QueryDocumentSnapshot) => ({
+            ...d.data(),
+            id: d.id,
+          })
+        ) as NotificationDocument[];
+        callback(notifications);
+      },
+      (error) => {
+        console.error('Error subscribing to notifications:', error);
+        callback([]);
+      }
+    );
   },
 
   // ==================== APP PRESENCE OPERATIONS ====================
@@ -645,10 +708,23 @@ export const FirestoreService = {
    */
   createHistory: async (
     data: Omit<HistoryDocument, 'id' | 'date'>
-  ): Promise<void> => {
-    await addDoc(collection(db(), Collections.HISTORY), {
+  ): Promise<string> => {
+    const ref = await addDoc(collection(db(), Collections.HISTORY), {
       ...data,
       date: serverTimestamp(),
+    });
+    return ref.id;
+  },
+
+  /**
+   * Mark a history record as acknowledged by a physical button press on the
+   * band. Called when a button-ack notification arrives shortly after the
+   * notification that triggered the buzz.
+   */
+  markHistoryAcknowledged: async (historyId: string): Promise<void> => {
+    await updateDoc(doc(db(), Collections.HISTORY, historyId), {
+      acknowledged: true,
+      acknowledgedAt: serverTimestamp(),
     });
   },
 

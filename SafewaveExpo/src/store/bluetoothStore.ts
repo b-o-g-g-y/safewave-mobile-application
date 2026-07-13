@@ -861,6 +861,28 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
             console.log('[BLE Store] Notification received:', notificationData);
             NotificationService.processNotification(notificationData);
           });
+          // The band notifies with a bare 0x01 when the user presses the
+          // physical button, acknowledging the buzz it is currently playing.
+          //
+          // The press carries no reference to what it acknowledges, so we have
+          // to attribute it. An admin alert wins over an ordinary phone
+          // notification: it's a targeted safety alert and the dashboard is
+          // waiting on the acknowledgement. Only if there's no alert pending
+          // does the press fall through to the phone-notification path.
+          BLEManager.subscribeToButtonAck((bytes: number[]) => {
+            console.log('[BLE Store] Button ack from band:', bytes);
+            // Lazy import to break circular dependency:
+            // bluetoothStore -> AlertService -> alertStore -> bluetoothStore
+            const { AlertService } = require('../services/alerts/AlertService');
+            AlertService.handleButtonAck()
+              .then((acknowledgedAlert: boolean) => {
+                if (acknowledgedAlert) return;
+                return NotificationService.handleButtonAck();
+              })
+              .catch((err: any) => {
+                console.error('[BLE Store] Button ack handling failed:', err);
+              });
+          });
           break;
         } catch (err: any) {
           console.log(`[BLE Store] subscribeToNotifications attempt ${attempt + 1}/3 failed:`, err?.message || err);
@@ -1049,6 +1071,13 @@ export const useBluetoothStore = create<BluetoothStore>((set, get) => ({
         console.error('[BLE Store] ForegroundService start failed:', fgError);
       }
       console.log('[BLE Store] Connection flow complete — state: connected');
+
+      // An alert may have arrived while the link was down (cold start, or a
+      // dropped connection) and be sitting un-buzzed. Now that the band is
+      // reachable, buzz it. Lazy import to break the circular dependency:
+      // bluetoothStore -> AlertService -> alertStore -> bluetoothStore
+      const { AlertService } = require('../services/alerts/AlertService');
+      AlertService.onBandConnected();
     } catch (error: any) {
       clearTimeout(connectTimeoutId);
       if (!connectTimedOut) {

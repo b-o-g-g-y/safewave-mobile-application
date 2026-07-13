@@ -14,6 +14,11 @@ import { AppPresenceService } from './src/services/AppPresenceService';
 import { BLEManager } from './src/services/bluetooth/BLEManager';
 import { PermissionsService } from './src/services/PermissionsService';
 import { PermissionsChecklistScreen } from './src/screens/permissions/PermissionsChecklistScreen';
+import { getMessaging, onMessage } from '@react-native-firebase/messaging';
+import { AlertService } from './src/services/alerts/AlertService';
+import { PushTokenService } from './src/services/alerts/PushTokenService';
+import { useAlertStore } from './src/store/alertStore';
+import { AlertAckModal } from './src/components/AlertAckModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, spacing } from './src/theme/colors';
 
@@ -178,6 +183,46 @@ const AppContent = () => {
     };
   }, [isAuthenticated, user?.uid]);
 
+  // Register this device for pushed alerts, and handle ones that arrive while
+  // the app is in the foreground. The device doc lives under the user's uid, so
+  // this can only run once they're authenticated.
+  useEffect(() => {
+    if (!isAuthenticated || !user?.uid) {
+      PushTokenService.cleanup();
+      AlertService.cleanup();
+      return;
+    }
+
+    PushTokenService.initialize(user.uid).catch((error) => {
+      console.error('[App] PushTokenService.initialize failed:', error);
+    });
+
+    // Firestore listener: delivers alerts whenever the app is open, with no push
+    // token required. FCM (below) is the complementary channel that can also wake
+    // a closed app. Both dedupe into the same queue.
+    AlertService.initialize(user.uid);
+
+    // Surface any alert that arrived while the app was closed, and retry acks
+    // that were stranded by being offline.
+    useAlertStore.getState().hydrate().then(() => {
+      AlertService.buzzForCurrentAlert();
+    }).catch((error) => {
+      console.error('[App] Alert hydrate failed:', error);
+    });
+
+    const unsubscribe = onMessage(getMessaging(), (message) => {
+      AlertService.handleRemoteMessage(message).catch((error) => {
+        console.error('[App] Foreground alert handling failed:', error);
+      });
+    });
+
+    return () => {
+      unsubscribe();
+      PushTokenService.cleanup();
+      AlertService.cleanup();
+    };
+  }, [isAuthenticated, user?.uid]);
+
   // Initialize/cleanup NotificationListenerService for Android
   useEffect(() => {
     if (Platform.OS === 'android' && isAuthenticated && user?.uid) {
@@ -242,6 +287,13 @@ const AppContent = () => {
         nextAppState === 'active'
       ) {
         console.log('[App] App came to foreground');
+
+        // The OS can rotate the FCM token while the app is dead, in which case
+        // onTokenRefresh never fired and Firestore is holding a dead token.
+        PushTokenService.refresh().catch(() => {});
+        // Retry any acknowledgement that couldn't be sent while offline.
+        useAlertStore.getState().flushUnsentAcks().catch(() => {});
+
         // Read battery/firmware if stably connected (skipped during background reconnections).
         // Only fire when already connected — not when connecting/reconnecting, to avoid
         // racing with the connect flow's own reads.
@@ -351,8 +403,16 @@ const AppContent = () => {
     return <PermissionsChecklistScreen onComplete={dismissPermissionsGate} />;
   }
 
-  // Show main tab navigator for authenticated users
-  return <MainTabNavigator />;
+  // Show main tab navigator for authenticated users. AlertAckModal is mounted
+  // alongside it (not inside a screen) so a pushed alert surfaces wherever the
+  // user happens to be. RN <Modal> renders in its own native window, so it sits
+  // above the tab bar without any navigation plumbing.
+  return (
+    <>
+      <MainTabNavigator />
+      <AlertAckModal />
+    </>
+  );
 };
 
 export default function App() {

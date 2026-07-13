@@ -92,6 +92,8 @@ export interface HistoryDocument {
   title?: string; // notification title (Android), when available
   body?: string; // notification body text (Android), when available
   filtered?: boolean; // true = notification was recorded but suppressed by phrase filter rules (band did not vibrate)
+  acknowledged?: boolean; // true = user pressed the band button while this notification's buzz was active
+  acknowledgedAt?: FirebaseFirestoreTypes.Timestamp; // when the button press arrived
   date: FirebaseFirestoreTypes.Timestamp;
 }
 
@@ -218,6 +220,34 @@ export interface ActivityLogMetadata {
   reason?: string; // For band_disconnected
   wasConnected?: boolean; // For app_closed
   batteryLevel?: number; // For low_battery
+}
+
+/**
+ * An alert sent from the admin dashboard (notifications/{notificationId}).
+ *
+ * The backend writes this doc first and unconditionally, then attempts a push
+ * as a best-effort extra. The app therefore has two delivery channels: this
+ * Firestore listener (works whenever the app is open, no push token needed) and
+ * FCM (which additionally wakes a backgrounded or closed app).
+ */
+export interface NotificationDocument {
+  id?: string;
+  targetUserId: string;
+  title: string;
+  body: string;
+  acknowledged?: boolean;
+  acknowledgedAt?: FirebaseFirestoreTypes.Timestamp;
+  createdAt?: FirebaseFirestoreTypes.Timestamp;
+}
+
+/**
+ * A single app install's push registration (users/{uid}/devices/{deviceId}).
+ * The backend reads fcmToken from here to push an alert to this user's phone.
+ */
+export interface DeviceDocument {
+  fcmToken: string;
+  platform: DevicePlatform;
+  updatedAt: FirebaseFirestoreTypes.Timestamp;
 }
 
 /**

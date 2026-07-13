@@ -448,8 +448,10 @@ export const AlertsScreen: React.FC = () => {
         }}
         onSave={handleSaveConfig}
         appName={selectedApp?.name || pendingNewApp?.name || ''}
-        initialVibrations={selectedApp?.config.numberOfVibrations || 2}
-        initialStrength={selectedApp?.config.strength || 50}
+        // 0 means "continuous" and must survive as 0, so fall back with ?? and
+        // not || (which would turn a saved continuous config back into 2x).
+        initialVibrations={selectedApp?.config.numberOfVibrations ?? 2}
+        initialStrength={selectedApp?.config.strength ?? 50}
         initialPhrases={selectedApp?.config.phrases ?? []}
         initialPhraseMode={selectedApp?.config.phraseMode ?? 'allow'}
         platform={Platform.OS as 'android' | 'ios'}

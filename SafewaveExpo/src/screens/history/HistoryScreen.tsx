@@ -28,6 +28,7 @@ interface HistoryItem {
   title: string;
   body: string;
   filtered: boolean;
+  acknowledged: boolean;
   date: Date;
 }
 
@@ -115,6 +116,7 @@ export const HistoryScreen: React.FC = () => {
         title: doc.title ?? '',
         body: doc.body ?? '',
         filtered: doc.filtered === true,
+        acknowledged: doc.acknowledged === true,
         date: doc.date ? doc.date.toDate() : new Date(),
       }));
       setHistory(items);
@@ -157,6 +159,7 @@ export const HistoryScreen: React.FC = () => {
         title: doc.title ?? '',
         body: doc.body ?? '',
         filtered: doc.filtered === true,
+        acknowledged: doc.acknowledged === true,
         date: doc.date ? doc.date.toDate() : new Date(),
       }));
       setHistory(items);
@@ -195,6 +198,14 @@ export const HistoryScreen: React.FC = () => {
             <View style={styles.filteredBadge}>
               <Ionicons name="notifications-off-outline" size={12} color={colors.textMuted} />
               <Text style={styles.filteredBadgeText}>Filtered (no buzz)</Text>
+            </View>
+          )}
+          {!item.filtered && item.acknowledged && (
+            <View style={styles.filteredBadge}>
+              <Ionicons name="checkmark-circle" size={12} color={colors.accent} />
+              <Text style={[styles.filteredBadgeText, { color: colors.accent }]}>
+                Acknowledged
+              </Text>
             </View>
           )}
         </View>
@@ -322,27 +333,39 @@ export const HistoryScreen: React.FC = () => {
                         </TouchableOpacity>
                       </View>
 
-                      {/* Status pill */}
-                      <View
-                        style={[
-                          styles.statusPill,
-                          selectedItem.filtered ? styles.statusPillFiltered : styles.statusPillBuzzed,
-                        ]}
-                      >
-                        <Ionicons
-                          name={selectedItem.filtered ? 'notifications-off-outline' : 'pulse'}
-                          size={14}
-                          color={selectedItem.filtered ? colors.textMuted : colors.accent}
-                        />
-                        <Text
-                          style={[
-                            styles.statusPillText,
-                            { color: selectedItem.filtered ? colors.textMuted : colors.accent },
-                          ]}
-                        >
-                          {selectedItem.filtered ? 'Filtered — band did not vibrate' : 'Band vibrated'}
-                        </Text>
-                      </View>
+                      {/* Status pill. Acknowledged wins over "Band vibrated":
+                          a press implies the buzz happened and was answered. */}
+                      {(() => {
+                        const status = selectedItem.filtered
+                          ? {
+                              pill: styles.statusPillFiltered,
+                              icon: 'notifications-off-outline' as const,
+                              color: colors.textMuted,
+                              label: 'Filtered — band did not vibrate',
+                            }
+                          : selectedItem.acknowledged
+                            ? {
+                                pill: styles.statusPillAcknowledged,
+                                icon: 'checkmark-circle' as const,
+                                color: colors.accent,
+                                label: 'Acknowledged on band',
+                              }
+                            : {
+                                pill: styles.statusPillBuzzed,
+                                icon: 'pulse' as const,
+                                color: colors.accent,
+                                label: 'Band vibrated',
+                              };
+
+                        return (
+                          <View style={[styles.statusPill, status.pill]}>
+                            <Ionicons name={status.icon} size={14} color={status.color} />
+                            <Text style={[styles.statusPillText, { color: status.color }]}>
+                              {status.label}
+                            </Text>
+                          </View>
+                        );
+                      })()}
 
                       {/* Content */}
                       <ScrollView
@@ -359,6 +382,19 @@ export const HistoryScreen: React.FC = () => {
                           <Text style={styles.detailNoBody}>
                             No additional details were captured for this notification.
                           </Text>
+                        )}
+
+                        {selectedItem.acknowledged && (
+                          <View style={styles.ackRow}>
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={16}
+                              color={colors.accent}
+                            />
+                            <Text style={styles.ackText}>
+                              You acknowledged this alert by pressing the button on your band.
+                            </Text>
+                          </View>
                         )}
                       </ScrollView>
                     </>
@@ -562,6 +598,20 @@ const styles = StyleSheet.create({
   },
   statusPillFiltered: {
     backgroundColor: colors.surfaceLight,
+  },
+  statusPillAcknowledged: {
+    backgroundColor: `${colors.accent}20`,
+  },
+  ackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+  ackText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
   },
   statusPillText: {
     fontSize: 12,

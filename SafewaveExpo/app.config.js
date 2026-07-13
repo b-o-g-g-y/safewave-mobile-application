@@ -13,7 +13,14 @@ const variants = {
     bgTaskIdentifier: 'com.safewave.forbusiness.refresh',
     icon: './assets/icon.png',
     adaptiveIconForeground: './assets/adaptive-icon.png',
-    extraInfoPlist: {},
+    // remote-notification is required for a data-only push to wake the app in
+    // the background; without it iOS silently drops the alert and the band
+    // never buzzes.
+    backgroundModes: ['bluetooth-central', 'remote-notification'],
+    extraInfoPlist: {
+      NSUserNotificationsUsageDescription:
+        'Safewave needs to send you notifications so your band can alert you.',
+    },
   },
   consumer: {
     name: 'Safewave',
@@ -27,10 +34,10 @@ const variants = {
     bgTaskIdentifier: 'com.safewaveMobileApp.refresh',
     icon: './assets/consumer/icon.png',
     adaptiveIconForeground: './assets/consumer/adaptive-icon.png',
-    // Parity with the live Flutter consumer app: removing these on update
-    // would silently revoke capabilities existing users rely on.
+    // Parity with the live consumer app: removing these on update would
+    // silently revoke capabilities existing users rely on.
+    backgroundModes: ['bluetooth-central', 'fetch', 'remote-notification'],
     extraInfoPlist: {
-      UIBackgroundModes: ['bluetooth-central', 'fetch', 'remote-notification'],
       NSPhotoLibraryUsageDescription:
         'This app requires access to your photo library to allow you to select and upload photos for profile pictures.',
       NSUserNotificationsUsageDescription:
@@ -71,7 +78,7 @@ module.exports = {
           'This app uses Bluetooth to connect to your Safewave Band',
         NSBluetoothPeripheralUsageDescription:
           'This app uses Bluetooth to connect to your Safewave Band',
-        UIBackgroundModes: ['bluetooth-central'],
+        UIBackgroundModes: v.backgroundModes,
         BGTaskSchedulerPermittedIdentifiers: [v.bgTaskIdentifier],
         ITSAppUsesNonExemptEncryption: false,
         ...v.extraInfoPlist,
@@ -111,6 +118,7 @@ module.exports = {
     },
     plugins: [
       './plugins/withFirebaseInit',
+      './plugins/withPushNotifications',
       './plugins/withDsym',
       './plugins/withNotificationListener',
       './plugins/withInstalledApps',
