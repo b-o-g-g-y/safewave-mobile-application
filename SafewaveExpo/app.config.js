@@ -4,7 +4,7 @@ const variants = {
   business: {
     name: 'Safewave for Business',
     version: '1.0.1',
-    iosBuildNumber: '5',
+    iosBuildNumber: '6',
     androidVersionCode: 5,
     iosBundleId: 'com.safewave.forbusiness',
     androidPackage: 'com.safewave.forbusiness',
